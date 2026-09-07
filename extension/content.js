@@ -10,11 +10,30 @@
   let scanTimer = 0;
   let lastUrl = location.href;
   let drainingQueue = false;
+  let runtimeGeneration = 0;
+  let nextRunToken = 0;
   const runQueue = [];
   const ruleStates = new Map();
   const deferredPageLoadIds = new Set();
 
-  const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+  function wait(ms, signal) {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new DOMException("流程已取消", "AbortError"));
+        return;
+      }
+      const timer = window.setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        window.clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        reject(new DOMException("流程已取消", "AbortError"));
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
 
   function isVisible(element) {
     if (!element || !(element instanceof Element)) return false;
@@ -71,7 +90,7 @@
       if (signal?.aborted) throw new DOMException("流程已取消", "AbortError");
       const element = findTarget(target);
       if (element) return element;
-      await wait(120);
+      await wait(120, signal);
     }
     return null;
   }
@@ -121,7 +140,8 @@
   async function executeStep(step, signal) {
     if (step.action === "delay") {
       if (signal?.aborted) throw new DOMException("流程已取消", "AbortError");
-      await wait(Math.max(0, Math.min(Number(step.value) || 0, 30000)));
+      const delayMs = Number.isFinite(Number(step.value)) ? Math.max(0, Math.min(Number(step.value), 30000)) : 0;
+      await wait(delayMs, signal);
       return { ok: true };
     }
 
@@ -146,6 +166,8 @@
     if (previous?.signature === signature) return previous;
     previous?.controller?.abort();
     const next = {
+      generation: runtimeGeneration,
+      token: Symbol(profile.id),
       signature,
       phase: "armed",
       wasSatisfied: false,
@@ -153,6 +175,8 @@
       queued: false,
       cooldownUntil: 0,
       controller: null,
+      cooldownTimer: 0,
+      runToken: 0,
       lastMessage: ""
     };
     ruleStates.set(profile.id, next);
@@ -160,10 +184,17 @@
   }
 
   function resetRuntimeStates() {
-    for (const state of ruleStates.values()) state.controller?.abort();
+    runtimeGeneration += 1;
+    for (const state of ruleStates.values()) {
+      state.controller?.abort();
+      if (state.cooldownTimer) window.clearTimeout(state.cooldownTimer);
+    }
     ruleStates.clear();
+    for (const item of runQueue) item.resolve?.({ ok: false, cancelled: true, message: "流程已取消" });
     runQueue.length = 0;
     deferredPageLoadIds.clear();
+    window.clearTimeout(scanTimer);
+    scanTimer = 0;
   }
 
   function primeAfterSettingsChange() {
@@ -179,34 +210,61 @@
     }
   }
 
-  function canQueue(profile, state) {
+  function canQueue(profile, state, manual = false) {
     const options = profile.trigger?.options || {};
-    if (["queued", "running", "cooldown", "failed"].includes(state.phase)) return false;
+    if (["queued", "running"].includes(state.phase)) return false;
+    if (manual) return true;
+    if (["cooldown", "failed"].includes(state.phase)) return false;
     if (Date.now() < state.cooldownUntil) return false;
     if (state.runCount >= Math.max(1, Number(options.maxRuns) || 1)) return false;
     if (options.oncePerPage !== false && state.runCount > 0) return false;
     return true;
   }
 
-  function queueProfile(profile, reason = "condition") {
-    if (!globalEnabled || !profile?.enabled || !matchesProfile(profile, location.href)) return false;
+  function queueProfile(profile, reason = "condition", { manual = false, resetCount = false, waitForResult = false } = {}) {
+    if (!globalEnabled || !profile || (!manual && !profile.enabled) || !matchesProfile(profile, location.href)) return false;
     const state = ruleState(profile);
-    if (!canQueue(profile, state)) return false;
+    if (["queued", "running"].includes(state.phase)) return false;
+    if (resetCount) {
+      if (state.cooldownTimer) window.clearTimeout(state.cooldownTimer);
+      state.cooldownTimer = 0;
+      state.runCount = 0;
+      state.cooldownUntil = 0;
+      state.phase = "armed";
+    }
+    if (!canQueue(profile, state, manual)) return false;
     state.phase = "queued";
     state.queued = true;
-    runQueue.push({ profile, state, reason });
+    const item = { profile, state, reason, manual, generation: runtimeGeneration };
+    const completion = waitForResult
+      ? new Promise((resolve) => { item.resolve = resolve; })
+      : null;
+    runQueue.push(item);
     drainQueue().catch(() => undefined);
-    return true;
+    return completion ? { queued: true, promise: completion } : true;
   }
 
-  async function executeProfile(profile, state, reason = "condition") {
+  function isCurrentRun(profile, state, runToken, generation, pageHref) {
+    return runtimeGeneration === generation
+      && ruleStates.get(profile.id) === state
+      && state.runToken === runToken
+      && location.href === pageHref
+      && matchesProfile(profile, location.href);
+  }
+
+  async function executeProfile(profile, state, reason = "condition", generation = runtimeGeneration) {
     const controller = new AbortController();
+    const runToken = ++nextRunToken;
+    const pageHref = location.href;
     state.controller = controller;
+    state.runToken = runToken;
     state.phase = "running";
     state.queued = false;
     try {
       for (const step of profile.steps.filter((item) => item.enabled !== false)) {
+        if (!isCurrentRun(profile, state, runToken, generation, pageHref)) throw new DOMException("流程已取消", "AbortError");
         const result = await executeStep(step, controller.signal);
+        if (!isCurrentRun(profile, state, runToken, generation, pageHref)) throw new DOMException("流程已取消", "AbortError");
         if (!result.ok) {
           state.phase = "failed";
           state.lastMessage = result.message || "流程执行失败";
@@ -219,15 +277,20 @@
       state.cooldownUntil = Date.now() + Math.max(0, Number(options.cooldownMs) || 0);
       state.phase = state.cooldownUntil > Date.now() ? "cooldown" : "completed";
       if (state.phase === "cooldown") {
-        window.setTimeout(() => {
-          if (state.phase !== "cooldown") return;
+        state.cooldownTimer = window.setTimeout(() => {
+          if (!isCurrentRun(profile, state, runToken, generation, pageHref) || state.phase !== "cooldown") return;
+          state.cooldownTimer = 0;
           state.phase = "completed";
           scheduleAutoRun();
         }, Math.max(0, Number(options.cooldownMs) || 0));
       }
       return { ok: true, message: "流程已执行完成", reason };
     } catch (error) {
-      if (error?.name === "AbortError") return { ok: false, cancelled: true, message: "流程已取消" };
+      if (error?.name === "AbortError") {
+        state.phase = "cancelled";
+        state.lastMessage = "流程已取消";
+        return { ok: false, cancelled: true, message: "流程已取消", reason };
+      }
       state.phase = "failed";
       state.lastMessage = error?.message || "流程执行失败";
       return { ok: false, message: state.lastMessage };
@@ -245,13 +308,21 @@
       while (runQueue.length) {
         const item = runQueue.shift();
         if (!item) continue;
-        const { profile, state } = item;
-        if (!globalEnabled || !profile.enabled || !matchesProfile(profile, location.href)) {
-          state.phase = "armed";
+        const { profile, state, manual, generation } = item;
+        if (generation !== runtimeGeneration || ruleStates.get(profile.id) !== state) {
+          state.phase = "cancelled";
           state.queued = false;
+          item.resolve?.({ ok: false, cancelled: true, message: "流程已取消" });
           continue;
         }
-        await executeProfile(profile, state, item.reason);
+        if (!globalEnabled || (!manual && !profile.enabled) || !matchesProfile(profile, location.href)) {
+          state.phase = "armed";
+          state.queued = false;
+          item.resolve?.({ ok: false, skipped: true, message: "规则未启用或不匹配当前页面" });
+          continue;
+        }
+        const result = await executeProfile(profile, state, item.reason, generation);
+        item.resolve?.(result);
       }
     } finally {
       drainingQueue = false;
@@ -323,7 +394,7 @@
   }
 
   function handleUserClick(event) {
-    if (!globalEnabled) return;
+    if (!globalEnabled || !event.isTrusted || pickerCleanup) return;
     for (const profile of matchingProfiles()) {
       const handler = TRIGGER_HANDLERS[profile.trigger?.type];
       if (handler?.matchesEvent?.({ event, profile })) queueProfile(profile, "userClick");
@@ -364,10 +435,13 @@
       queueProfile(normalized, "automatic");
       return { ok: true, queued: true, message: "规则已加入执行队列" };
     }
-    if (state.phase === "running") return { ok: false, message: "规则正在执行" };
-    state.runCount = 0;
-    state.phase = "armed";
-    return executeProfile(normalized, state, "manual");
+    if (!globalEnabled) return { ok: false, message: "总开关已关闭，无法测试规则" };
+    if (!matchesProfile(normalized, location.href)) return { ok: false, message: "规则与当前页面不匹配，无法测试" };
+    const queued = queueProfile(normalized, "manual", { manual: true, resetCount: true, waitForResult: true });
+    if (!queued) {
+      return { ok: false, message: state.phase === "running" ? "规则正在执行" : "规则暂时无法加入执行队列" };
+    }
+    return queued.promise;
   }
 
   function uniqueCssSelector(element) {
