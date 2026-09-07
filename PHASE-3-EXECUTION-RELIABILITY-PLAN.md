@@ -11,7 +11,7 @@
 - S2 已完成核心项：MutationObserver 使用 debounce + 最大扫描延迟；导航轮询、`pageshow`/可见性恢复和冷却期单个待处理激活已加入。
 - S3 已完成第一步：Panel 不再直接写配置，统一通过 service worker 串行写入并用 `revision` 检测并发覆盖；Trigger/Action 继续采用现有内部静态 registry。
 - 已验证：Node 内置回归测试 5 项通过；真实加载的 MV3 Playwright fixture 通过 13 项，包括手动队列、取消、可信点击、SPA 导航和页面不匹配拒绝。
-- S4 验收已完成核心 fixture：在 Chromium 隐身启动参数下通过同一 13 项浏览器回归；仍待版本号更新、最终打包、合并和发布 tag。上述步骤完成前不要把本分支称为正式发布版本。
+- S4 验收已完成核心 fixture：在 Chromium 隐身启动参数下通过同一 13 项浏览器回归；版本号已更新为 `2.7.0`，仍待最终打包、合并和发布 tag。上述步骤完成前不要把本分支称为正式发布版本。
 
 ## 1. 一句话结论
 
