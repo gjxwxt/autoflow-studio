@@ -25,8 +25,10 @@ AutoFlow Studio 是一个本地优先的 Chrome 扩展，用可视化站点规�
 
 - `v2.6.0`：页面加载型自动化规则基线。
 - `feat/phase-2-trigger-engine`：条件触发、多规则调度和可扩展触发器架构。
+- 下一阶段：先加固执行可靠性、取消、页面生命周期和数据安全，再扩展内部运行边界。
 
 二期设计和验收标准见 [`PHASE-2-TRIGGER-ENGINE-PLAN.md`](PHASE-2-TRIGGER-ENGINE-PLAN.md)。
+下一阶段执行计划见 [`PHASE-3-EXECUTION-RELIABILITY-PLAN.md`](PHASE-3-EXECUTION-RELIABILITY-PLAN.md)。
 
 ## 安全说明
 
