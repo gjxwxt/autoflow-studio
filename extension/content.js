@@ -235,7 +235,10 @@
     const satisfied = Boolean(findTarget(profile.trigger?.target, { requireVisible: true }));
     const becameSatisfied = !state.wasSatisfied && satisfied;
     state.wasSatisfied = satisfied;
-    if (becameSatisfied) queueProfile(profile, "elementVisible");
+    const options = profile.trigger?.options || {};
+    if (becameSatisfied && (state.runCount === 0 || options.retriggerWhenReappears)) {
+      queueProfile(profile, "elementVisible");
+    }
   }
 
   function evaluateRules() {

@@ -5,3 +5,8 @@ __MACOSX/
 node_modules/
 test-results/
 playwright-report/
+work/phase2-test-extension/
+work/phase2-playwright-profile/
+work/chrome-test-profile-*/
+work/chrome-test-*.log
+work/phase2-browser-test.mjs
