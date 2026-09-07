@@ -8,6 +8,9 @@
   let globalEnabled = true;
   let pickerCleanup = null;
   let scanTimer = 0;
+  let scanMaxTimer = 0;
+  let navigationTimer = 0;
+  let scanDirty = false;
   let lastUrl = location.href;
   let drainingQueue = false;
   let runtimeGeneration = 0;
@@ -194,7 +197,10 @@
     runQueue.length = 0;
     deferredPageLoadIds.clear();
     window.clearTimeout(scanTimer);
+    window.clearTimeout(scanMaxTimer);
     scanTimer = 0;
+    scanMaxTimer = 0;
+    scanDirty = false;
   }
 
   function primeAfterSettingsChange() {
@@ -369,7 +375,19 @@
 
   function scheduleAutoRun() {
     window.clearTimeout(scanTimer);
-    scanTimer = window.setTimeout(evaluateRules, 120);
+    scanDirty = true;
+    scanTimer = window.setTimeout(runScheduledScan, 120);
+    if (!scanMaxTimer) scanMaxTimer = window.setTimeout(runScheduledScan, 1000);
+  }
+
+  function runScheduledScan() {
+    window.clearTimeout(scanTimer);
+    window.clearTimeout(scanMaxTimer);
+    scanTimer = 0;
+    scanMaxTimer = 0;
+    if (!scanDirty) return;
+    scanDirty = false;
+    evaluateRules();
   }
 
   function targetMatchesElement(element, target = {}) {
@@ -422,6 +440,7 @@
     }
     window.addEventListener("hashchange", resetForNavigation, true);
     window.addEventListener("popstate", resetForNavigation, true);
+    navigationTimer = window.setInterval(resetForNavigation, 500);
   }
 
   async function applyProfile(profile, force = false) {
@@ -609,6 +628,14 @@
   observeDocument();
   document.addEventListener("DOMContentLoaded", scheduleAutoRun, { once: true });
   window.addEventListener("load", scheduleAutoRun, { once: true });
+  window.addEventListener("pageshow", () => {
+    lastUrl = location.href;
+    resetRuntimeStates();
+    scheduleAutoRun();
+  }, true);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") scheduleAutoRun();
+  }, true);
   document.addEventListener("click", handleUserClick, true);
   patchHistoryNavigation();
   loadSettings();
