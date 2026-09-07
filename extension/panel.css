@@ -49,10 +49,10 @@ h3 { font-size: 13px; line-height: 1.3; }
 .permission-badge.ok { background: color-mix(in oklch, var(--success) 13%, white); color: color-mix(in oklch, var(--success) 82%, black); }
 .permission-badge.warn { background: color-mix(in oklch, var(--danger) 10%, white); color: color-mix(in oklch, var(--danger) 82%, black); }
 
-.profile-section { position: relative; display: flex; min-height: 0; flex: 1; flex-direction: column; margin-bottom: 20px; }
-.profile-section::before { content: ""; position: absolute; top: -11px; left: 0; right: 0; border-top: 1px solid var(--line); }
+.profile-section { display: flex; min-height: 0; flex: 1; flex-direction: column; margin-bottom: 20px; padding-top: 2px; border-top: 1px solid var(--line); }
 .profile-section[hidden] { display: none; }
 .section-heading { align-items: flex-end; margin-bottom: 10px; }
+.profile-section > .section-heading { margin-top: 16px; }
 .section-heading > div, .editor-heading > div { display: grid; gap: 3px; }
 .section-heading .section-heading-actions { display: flex; align-items: center; gap: 2px; }
 .quick-create-row { display: grid; gap: 8px; margin-bottom: 12px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-subtle); }
