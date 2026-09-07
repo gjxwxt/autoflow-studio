@@ -70,10 +70,27 @@
     next.id = next.id || createId("profile");
     next.name = next.name || "未命名站点";
     next.enabled = Boolean(next.enabled);
+    next.schemaVersion = Math.max(3, Number(next.schemaVersion) || 0);
     next.site = next.site || { origin: "", pathPrefix: "", hashPrefix: "" };
     next.site.origin = next.site.origin || "";
     next.site.pathPrefix = next.site.pathPrefix || "";
     next.site.hashPrefix = next.site.hashPrefix || "";
+    const incomingTrigger = next.trigger || {};
+    const incomingTriggerType = ["pageLoad", "elementVisible", "userClick"].includes(incomingTrigger.type)
+      ? incomingTrigger.type
+      : "pageLoad";
+    const oncePerPage = incomingTrigger.options?.oncePerPage !== false;
+    next.trigger = {
+      type: incomingTriggerType,
+      target: incomingTrigger.target || {},
+      options: {
+        oncePerPage,
+        retriggerWhenReappears: Boolean(incomingTrigger.options?.retriggerWhenReappears),
+        cooldownMs: Math.max(0, Math.min(Number(incomingTrigger.options?.cooldownMs) || 1500, 30000)),
+        timeoutMs: Math.max(1000, Math.min(Number(incomingTrigger.options?.timeoutMs) || 30000, 120000)),
+        maxRuns: Math.max(1, Math.min(Number(incomingTrigger.options?.maxRuns) || (oncePerPage ? 1 : 50), 50))
+      }
+    };
     if (!Array.isArray(next.steps)) {
       const legacySteps = Array.isArray(next.fields) ? next.fields : [];
       next.steps = legacySteps.map((field) => ({ ...field }));

@@ -17,6 +17,11 @@
     wait: "等待出现",
     delay: "等待时间"
   });
+  const TRIGGER_LABELS = Object.freeze({
+    pageLoad: "页面加载",
+    elementVisible: "元素出现",
+    userClick: "用户点击"
+  });
   const state = {
     profiles: [],
     activeId: "",
@@ -318,12 +323,21 @@
 
   function profileMatchKey(profile) {
     const site = profile?.site || {};
+    const trigger = profile?.trigger || {};
+    const triggerTarget = trigger.target || {};
     if (!site.origin) return "";
     try {
       return JSON.stringify([
         normalizeOrigin(site.origin),
         String(site.pathPrefix || "").trim(),
-        String(site.hashPrefix || "").trim()
+        String(site.hashPrefix || "").trim(),
+        trigger.type || "pageLoad",
+        triggerTarget.id || "",
+        triggerTarget.name || "",
+        triggerTarget.placeholder || "",
+        triggerTarget.ariaLabel || "",
+        triggerTarget.css || "",
+        triggerTarget.text || ""
       ]);
     } catch {
       return "";
@@ -416,7 +430,7 @@
 
   async function persistState() {
     await chrome.storage.local.set({
-      schemaVersion: 2,
+      schemaVersion: 3,
       profiles: state.profiles,
       activeProfileId: state.activeId,
       globalEnabled: state.globalEnabled
@@ -763,6 +777,7 @@
   function renderEditor() {
     const profile = activeProfile();
     if (state.view !== "editor" || !profile) { editor.hidden = true; return; }
+    profile.trigger = normalizeProfile(profile).trigger;
     editor.hidden = false;
     $("#editorModeLabel").textContent = state.editorMode === "new" ? "新建规则" : "编辑规则";
     $("#editorHeading").textContent = profile.name;
@@ -771,8 +786,39 @@
     $("#siteOrigin").value = profile.site.origin;
     $("#sitePath").value = profile.site.pathPrefix;
     $("#siteHash").value = profile.site.hashPrefix;
+    const triggerType = profile.trigger.type || "pageLoad";
+    document.querySelectorAll("[data-trigger-mode]").forEach((tab) => {
+      const active = tab.dataset.triggerMode === (triggerType === "pageLoad" ? "pageLoad" : "condition");
+      tab.classList.toggle("active", active);
+      tab.setAttribute("aria-selected", String(active));
+    });
+    const triggerConfig = $("#triggerConfig");
+    triggerConfig.hidden = triggerType === "pageLoad";
+    if (triggerConfig.hidden) {
+      $("#triggerType").value = "elementVisible";
+    } else {
+      $("#triggerType").value = triggerType;
+      $("#triggerTargetText").textContent = targetSummary(profile.trigger.target);
+      $("#triggerTargetText").title = targetSummary(profile.trigger.target);
+      $("#triggerOnce").checked = profile.trigger.options.oncePerPage !== false;
+      $("#triggerRepeat").checked = Boolean(profile.trigger.options.retriggerWhenReappears);
+      $("#triggerCooldown").value = Number(profile.trigger.options.cooldownMs) || 1500;
+      $("#triggerRepeat").disabled = triggerType !== "elementVisible";
+      $("#triggerHint").textContent = triggerType === "userClick"
+        ? "监听用户实际点击选中的元素，触发后按顺序执行下面的步骤。"
+        : "页面保持打开时监听元素从不存在或不可见变为可见。重复 DOM 变化不会重复执行。";
+    }
     stepList.replaceChildren(...profile.steps.map((step, index) => makeStepRow(step, index, profile)));
     emptySteps.hidden = profile.steps.length > 0;
+  }
+
+  function setTriggerMode(mode) {
+    const profile = activeProfile();
+    if (!profile) return;
+    profile.trigger = normalizeProfile(profile).trigger;
+    profile.trigger.type = mode === "condition" ? (profile.trigger.type === "pageLoad" ? "elementVisible" : profile.trigger.type) : "pageLoad";
+    markEditorDirty();
+    renderEditor();
   }
 
   function render() {
@@ -826,9 +872,16 @@
       profile.site.pathPrefix = $("#sitePath").value.trim();
       profile.site.hashPrefix = $("#siteHash").value.trim();
       profile.enabled = $("#profileEnabled").checked;
+      profile.trigger = normalizeProfile(profile).trigger;
+      const triggerTarget = profile.trigger.target || {};
+      const hasTriggerTarget = ["id", "name", "placeholder", "ariaLabel", "css", "text"]
+        .some((key) => String(triggerTarget[key] || "").trim());
+      if (profile.trigger.type !== "pageLoad" && !hasTriggerTarget) {
+        throw new Error("请先选择触发元素");
+      }
       await ensurePermission(profile);
       const saved = commitEditorProfile(profile, isNew);
-      await chrome.storage.local.set({ schemaVersion: 2, profiles: state.profiles, activeProfileId: "", globalEnabled: state.globalEnabled });
+      await chrome.storage.local.set({ schemaVersion: 3, profiles: state.profiles, activeProfileId: "", globalEnabled: state.globalEnabled });
       await chrome.runtime.sendMessage({ type: "syncContentScripts" }).catch(() => undefined);
       state.editorDraft = copyProfile(saved);
       state.editorMode = "edit";
@@ -990,6 +1043,36 @@
   $("#siteOrigin").addEventListener("input", (event) => { const profile = activeProfile(); if (profile) { profile.site.origin = event.target.value.trim(); markEditorDirty(); } });
   $("#sitePath").addEventListener("input", (event) => { const profile = activeProfile(); if (profile) { profile.site.pathPrefix = event.target.value.trim(); markEditorDirty(); } });
   $("#siteHash").addEventListener("input", (event) => { const profile = activeProfile(); if (profile) { profile.site.hashPrefix = event.target.value.trim(); markEditorDirty(); } });
+  document.querySelectorAll("[data-trigger-mode]").forEach((tab) => {
+    tab.addEventListener("click", () => setTriggerMode(tab.dataset.triggerMode));
+  });
+  $("#triggerType").addEventListener("change", (event) => {
+    const profile = activeProfile();
+    if (!profile) return;
+    profile.trigger.type = event.target.value;
+    markEditorDirty();
+    renderEditor();
+  });
+  $("#pickTrigger").addEventListener("click", () => startPicker("trigger"));
+  $("#triggerOnce").addEventListener("change", (event) => {
+    const profile = activeProfile();
+    if (!profile) return;
+    profile.trigger.options.oncePerPage = event.target.checked;
+    profile.trigger.options.maxRuns = event.target.checked ? 1 : 50;
+    markEditorDirty();
+  });
+  $("#triggerRepeat").addEventListener("change", (event) => {
+    const profile = activeProfile();
+    if (!profile) return;
+    profile.trigger.options.retriggerWhenReappears = event.target.checked;
+    markEditorDirty();
+  });
+  $("#triggerCooldown").addEventListener("input", (event) => {
+    const profile = activeProfile();
+    if (!profile) return;
+    profile.trigger.options.cooldownMs = Math.max(0, Math.min(Number(event.target.value) || 0, 30000));
+    markEditorDirty();
+  });
 
   chrome.tabs.onActivated.addListener(scheduleTabRefresh);
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -1011,10 +1094,16 @@
     }
     const profile = activeProfile();
     if (!profile) return;
-    const step = profile.steps[state.picker.stepIndex];
-    if (step) {
-      step.target = message.target;
+    if (state.picker.purpose === "trigger") {
+      profile.trigger = normalizeProfile(profile).trigger;
+      profile.trigger.target = message.target;
       markEditorDirty();
+    } else {
+      const step = profile.steps[state.picker.stepIndex];
+      if (step) {
+        step.target = message.target;
+        markEditorDirty();
+      }
     }
     state.picker = null;
     renderEditor();

@@ -21,7 +21,7 @@ async function ensureStorage() {
   profile.steps[0].value = stored.username || "";
   profile.steps[1].value = stored.password || "";
   await chrome.storage.local.set({
-    schemaVersion: 2,
+    schemaVersion: 3,
     profiles: [profile],
     activeProfileId: profile.id,
     globalEnabled: typeof stored.globalEnabled === "boolean" ? stored.globalEnabled : true
@@ -48,7 +48,7 @@ async function syncContentScripts() {
         id: scriptIdForOrigin(origin),
         matches: [`${origin}/*`],
         js: ["shared.js", "content.js"],
-        runAt: "document_idle"
+        runAt: "document_start"
       });
     } catch {
       // Ignore incomplete profiles until the user fixes their site origin.
@@ -64,7 +64,11 @@ async function syncContentScripts() {
     const current = ours.find((script) => script.id === id);
     if (!current) {
       await chrome.scripting.registerContentScripts([definition]);
-    } else if (JSON.stringify(current.matches) !== JSON.stringify(definition.matches)) {
+    } else if (
+      JSON.stringify(current.matches) !== JSON.stringify(definition.matches)
+      || JSON.stringify(current.js) !== JSON.stringify(definition.js)
+      || current.runAt !== definition.runAt
+    ) {
       await chrome.scripting.updateContentScripts([definition]);
     }
   }
