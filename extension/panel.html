@@ -126,9 +126,21 @@
             <span id="triggerTargetText" class="target-chip">未选择元素</span>
             <button id="pickTrigger" class="text-button" type="button">选择元素</button>
           </div>
-          <div class="trigger-options">
-            <label class="secret-line"><input id="triggerOnce" type="checkbox" checked /><span>每个页面只执行一次</span></label>
-            <label class="secret-line"><input id="triggerRepeat" type="checkbox" /><span>元素重新出现时再次执行</span></label>
+          <div class="trigger-options" role="radiogroup" aria-label="触发次数">
+            <label class="trigger-option">
+              <input id="triggerOnce" type="radio" name="triggerFrequency" value="once" checked />
+              <span class="trigger-option-copy">
+                <strong>仅执行一次</strong>
+                <small>每个页面第一次触发时执行</small>
+              </span>
+            </label>
+            <label class="trigger-option">
+              <input id="triggerRepeat" type="radio" name="triggerFrequency" value="repeat" />
+              <span class="trigger-option-copy">
+                <strong id="triggerRepeatLabel">重复执行</strong>
+                <small id="triggerRepeatHint">元素再次从不可见变为可见时执行</small>
+              </span>
+            </label>
             <label class="field-block trigger-cooldown-field"><span>触发冷却（毫秒）</span><input id="triggerCooldown" type="number" min="0" max="30000" step="100" value="1500" /></label>
           </div>
           <p id="triggerHint" class="trigger-hint">页面保持打开时监听元素从不存在或不可见变为可见。重复 DOM 变化不会重复执行。</p>

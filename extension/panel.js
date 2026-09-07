@@ -799,10 +799,16 @@
       $("#triggerType").value = triggerType;
       $("#triggerTargetText").textContent = targetSummary(profile.trigger.target);
       $("#triggerTargetText").title = targetSummary(profile.trigger.target);
-      $("#triggerOnce").checked = profile.trigger.options.oncePerPage !== false;
-      $("#triggerRepeat").checked = Boolean(profile.trigger.options.retriggerWhenReappears);
+      const repeatMode = triggerType === "elementVisible"
+        ? Boolean(profile.trigger.options.retriggerWhenReappears)
+        : profile.trigger.options.oncePerPage === false;
+      $("#triggerOnce").checked = !repeatMode;
+      $("#triggerRepeat").checked = repeatMode;
       $("#triggerCooldown").value = Number(profile.trigger.options.cooldownMs) || 1500;
-      $("#triggerRepeat").disabled = triggerType !== "elementVisible";
+      $("#triggerRepeatLabel").textContent = triggerType === "userClick" ? "每次点击都执行" : "重复执行";
+      $("#triggerRepeatHint").textContent = triggerType === "userClick"
+        ? "每次点击选中的元素时执行。"
+        : "元素再次从不可见变为可见时执行。";
       $("#triggerHint").textContent = triggerType === "userClick"
         ? "监听用户实际点击选中的元素，触发后按顺序执行下面的步骤。"
         : "页面保持打开时监听元素从不存在或不可见变为可见。重复 DOM 变化不会重复执行。";
@@ -1075,19 +1081,18 @@
     renderEditor();
   });
   $("#pickTrigger").addEventListener("click", () => startPicker("trigger"));
-  $("#triggerOnce").addEventListener("change", (event) => {
+  function setTriggerRunMode(mode) {
     const profile = activeProfile();
     if (!profile) return;
-    profile.trigger.options.oncePerPage = event.target.checked;
-    profile.trigger.options.maxRuns = event.target.checked ? 1 : 50;
+    const repeat = mode === "repeat";
+    profile.trigger.options.oncePerPage = !repeat;
+    profile.trigger.options.retriggerWhenReappears = profile.trigger.type === "elementVisible" && repeat;
+    profile.trigger.options.maxRuns = repeat ? 50 : 1;
     markEditorDirty();
-  });
-  $("#triggerRepeat").addEventListener("change", (event) => {
-    const profile = activeProfile();
-    if (!profile) return;
-    profile.trigger.options.retriggerWhenReappears = event.target.checked;
-    markEditorDirty();
-  });
+    renderEditor();
+  }
+  $("#triggerOnce").addEventListener("change", () => setTriggerRunMode("once"));
+  $("#triggerRepeat").addEventListener("change", () => setTriggerRunMode("repeat"));
   $("#triggerCooldown").addEventListener("input", (event) => {
     const profile = activeProfile();
     if (!profile) return;

@@ -79,16 +79,20 @@
     const incomingTriggerType = ["pageLoad", "elementVisible", "userClick"].includes(incomingTrigger.type)
       ? incomingTrigger.type
       : "pageLoad";
-    const oncePerPage = incomingTrigger.options?.oncePerPage !== false;
+    const isConditionTrigger = incomingTriggerType !== "pageLoad";
+    const repeatMode = isConditionTrigger && (incomingTriggerType === "elementVisible"
+      ? Boolean(incomingTrigger.options?.retriggerWhenReappears)
+      : incomingTrigger.options?.oncePerPage === false);
+    const oncePerPage = !repeatMode;
     next.trigger = {
       type: incomingTriggerType,
       target: incomingTrigger.target || {},
       options: {
         oncePerPage,
-        retriggerWhenReappears: Boolean(incomingTrigger.options?.retriggerWhenReappears),
+        retriggerWhenReappears: incomingTriggerType === "elementVisible" && repeatMode,
         cooldownMs: Math.max(0, Math.min(Number(incomingTrigger.options?.cooldownMs) || 1500, 30000)),
         timeoutMs: Math.max(1000, Math.min(Number(incomingTrigger.options?.timeoutMs) || 30000, 120000)),
-        maxRuns: Math.max(1, Math.min(Number(incomingTrigger.options?.maxRuns) || (oncePerPage ? 1 : 50), 50))
+        maxRuns: repeatMode ? 50 : 1
       }
     };
     if (!Array.isArray(next.steps)) {
