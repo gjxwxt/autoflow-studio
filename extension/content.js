@@ -94,6 +94,29 @@
     return element.querySelector("input, select, textarea") || element;
   }
 
+  const ACTION_HANDLERS = Object.freeze({
+    wait: async () => ({ ok: true }),
+    check: async ({ input, step }) => {
+      const desired = step.value === true || step.value === "true" || step.value === 1;
+      if (Boolean(input.checked) !== desired) input.click();
+      return { ok: true };
+    },
+    click: async ({ input }) => {
+      input.click();
+      return { ok: true };
+    },
+    select: async ({ input, step }) => {
+      if (!(input instanceof HTMLSelectElement)) return { ok: false, message: "目标元素不是下拉框" };
+      const option = [...input.options].find((item) => item.value === String(step.value) || item.textContent.trim() === String(step.value));
+      setValue(input, option ? option.value : step.value);
+      return { ok: true };
+    },
+    fill: async ({ input, step }) => {
+      setValue(input, step.value ?? "");
+      return { ok: true };
+    }
+  });
+
   async function executeStep(step, signal) {
     if (step.action === "delay") {
       if (signal?.aborted) throw new DOMException("流程已取消", "AbortError");
@@ -104,20 +127,9 @@
     const element = await waitForTarget(step.target, Math.max(1000, Math.min(Number(step.timeoutMs) || 12000, 30000)), signal);
     if (!element) return { ok: false, message: `找不到：${step.label || targetSummary(step.target)}` };
     const input = inputForLabel(element);
-
-    if (step.action === "wait") return { ok: true };
-    if (step.action === "check") {
-      const desired = step.value === true || step.value === "true" || step.value === 1;
-      if (Boolean(input.checked) !== desired) input.click();
-    } else if (step.action === "click") {
-      input.click();
-    } else if (step.action === "select" && input instanceof HTMLSelectElement) {
-      const option = [...input.options].find((item) => item.value === String(step.value) || item.textContent.trim() === String(step.value));
-      setValue(input, option ? option.value : step.value);
-    } else if (step.action === "fill") {
-      setValue(input, step.value ?? "");
-    }
-    return { ok: true };
+    const handler = ACTION_HANDLERS[step.action];
+    if (!handler) return { ok: false, message: `不支持的动作：${step.action}` };
+    return handler({ element, input, step, signal });
   }
 
   function matchingProfiles() {
@@ -241,6 +253,20 @@
     }
   }
 
+  const TRIGGER_HANDLERS = Object.freeze({
+    pageLoad: {
+      onScan: ({ profile, state }) => {
+        if (state.runCount === 0) queueProfile(profile, "pageLoad");
+      }
+    },
+    elementVisible: {
+      onScan: ({ profile, state }) => evaluateElementVisible(profile, state)
+    },
+    userClick: {
+      matchesEvent: ({ event, profile }) => eventMatchesTarget(event, profile.trigger.target)
+    }
+  });
+
   function evaluateRules() {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
@@ -250,11 +276,7 @@
     for (const profile of matchingProfiles()) {
       const state = ruleState(profile);
       const triggerType = profile.trigger?.type || "pageLoad";
-      if (triggerType === "pageLoad") {
-        if (state.runCount === 0) queueProfile(profile, "pageLoad");
-      } else if (triggerType === "elementVisible") {
-        evaluateElementVisible(profile, state);
-      }
+      TRIGGER_HANDLERS[triggerType]?.onScan?.({ profile, state });
     }
   }
 
@@ -287,8 +309,8 @@
   function handleUserClick(event) {
     if (!globalEnabled) return;
     for (const profile of matchingProfiles()) {
-      if (profile.trigger?.type !== "userClick") continue;
-      if (eventMatchesTarget(event, profile.trigger.target)) queueProfile(profile, "userClick");
+      const handler = TRIGGER_HANDLERS[profile.trigger?.type];
+      if (handler?.matchesEvent?.({ event, profile })) queueProfile(profile, "userClick");
     }
   }
 
