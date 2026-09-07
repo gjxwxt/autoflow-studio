@@ -34,6 +34,13 @@ test("share export is a whitelist and never carries input values", () => {
         action: "click",
         value: "",
         target: { tag: "button", text: "登录", css: "button[type=submit]" }
+      },
+      {
+        id: "step-3",
+        label: "同意条款",
+        action: "check",
+        value: true,
+        target: { tag: "input", type: "checkbox", id: "agree" }
       }
     ]
   });
@@ -42,6 +49,8 @@ test("share export is a whitelist and never carries input values", () => {
   assert.equal("value" in share.steps[0], false);
   assert.equal(share.steps[0].target.text, undefined);
   assert.equal(share.steps[1].target.text, "登录");
+  assert.equal(share.steps[2].actionValue, true);
+  assert.equal(shared.normalizeProfile(share).steps[2].value, true);
   assert.equal("runState" in share, false);
 
   const backup = shared.exportProfileData(profile, true);

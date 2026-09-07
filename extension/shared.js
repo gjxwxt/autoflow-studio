@@ -158,7 +158,7 @@
         label: field.label || "步骤",
         action,
         secret: Boolean(field.secret),
-        value: field.value ?? "",
+        value: field.value ?? field.actionValue ?? "",
         enabled: field.enabled !== false && action !== UNSUPPORTED_ACTION,
         timeoutMs: boundedNumber(field.timeoutMs, 12000, 1000, 120000),
         target: normalizeTarget(field.target)
@@ -210,6 +210,7 @@
           target: normalizeTarget(step.target)
         };
         if (includeSecrets) exportedStep.value = step.value ?? "";
+        else if (!step.secret && step.action !== "fill") exportedStep.actionValue = step.value ?? "";
         return exportedStep;
       })
     };
