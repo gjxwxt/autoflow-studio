@@ -98,7 +98,8 @@
     return null;
   }
 
-  function setValue(element, value) {
+  function setValue(element, value, guard = () => undefined) {
+    guard();
     const prototype = element instanceof HTMLTextAreaElement
       ? HTMLTextAreaElement.prototype
       : element instanceof HTMLSelectElement
@@ -107,8 +108,11 @@
     const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
     if (setter) setter.call(element, value);
     else element.value = value;
+    guard();
     element.dispatchEvent(new Event("input", { bubbles: true }));
+    guard();
     element.dispatchEvent(new Event("change", { bubbles: true }));
+    guard();
   }
 
   function inputForLabel(element) {
@@ -118,42 +122,52 @@
   }
 
   const ACTION_HANDLERS = Object.freeze({
-    wait: async () => ({ ok: true }),
-    check: async ({ input, step }) => {
+    wait: async ({ guard }) => { guard(); return { ok: true }; },
+    check: async ({ input, step, guard }) => {
+      guard();
       const desired = step.value === true || step.value === "true" || step.value === 1;
-      if (Boolean(input.checked) !== desired) input.click();
+      if (Boolean(input.checked) !== desired) {
+        guard();
+        input.click();
+        guard();
+      }
       return { ok: true };
     },
-    click: async ({ input }) => {
+    click: async ({ input, guard }) => {
+      guard();
       input.click();
+      guard();
       return { ok: true };
     },
-    select: async ({ input, step }) => {
+    select: async ({ input, step, guard }) => {
+      guard();
       if (!(input instanceof HTMLSelectElement)) return { ok: false, message: "目标元素不是下拉框" };
       const option = [...input.options].find((item) => item.value === String(step.value) || item.textContent.trim() === String(step.value));
-      setValue(input, option ? option.value : step.value);
+      setValue(input, option ? option.value : step.value, guard);
       return { ok: true };
     },
-    fill: async ({ input, step }) => {
-      setValue(input, step.value ?? "");
+    fill: async ({ input, step, guard }) => {
+      setValue(input, step.value ?? "", guard);
       return { ok: true };
     }
   });
 
-  async function executeStep(step, signal) {
+  async function executeStep(step, signal, guard = () => undefined) {
     if (step.action === "delay") {
-      if (signal?.aborted) throw new DOMException("流程已取消", "AbortError");
+      guard();
       const delayMs = Number.isFinite(Number(step.value)) ? Math.max(0, Math.min(Number(step.value), 30000)) : 0;
       await wait(delayMs, signal);
+      guard();
       return { ok: true };
     }
 
     const element = await waitForTarget(step.target, Math.max(1000, Math.min(Number(step.timeoutMs) || 12000, 30000)), signal);
+    guard();
     if (!element) return { ok: false, message: `找不到：${step.label || targetSummary(step.target)}` };
     const input = inputForLabel(element);
     const handler = ACTION_HANDLERS[step.action];
     if (!handler) return { ok: false, message: `不支持的动作：${step.action}` };
-    return handler({ element, input, step, signal });
+    return handler({ element, input, step, signal, guard });
   }
 
   function matchingProfiles() {
@@ -176,6 +190,7 @@
       wasSatisfied: false,
       runCount: 0,
       queued: false,
+      pendingActivation: false,
       cooldownUntil: 0,
       controller: null,
       cooldownTimer: 0,
@@ -268,8 +283,13 @@
     state.queued = false;
     try {
       for (const step of profile.steps.filter((item) => item.enabled !== false)) {
-        if (!isCurrentRun(profile, state, runToken, generation, pageHref)) throw new DOMException("流程已取消", "AbortError");
-        const result = await executeStep(step, controller.signal);
+        const guard = () => {
+          if (controller.signal.aborted || !isCurrentRun(profile, state, runToken, generation, pageHref)) {
+            throw new DOMException("流程已取消", "AbortError");
+          }
+        };
+        guard();
+        const result = await executeStep(step, controller.signal, guard);
         if (!isCurrentRun(profile, state, runToken, generation, pageHref)) throw new DOMException("流程已取消", "AbortError");
         if (!result.ok) {
           state.phase = "failed";
@@ -287,6 +307,11 @@
           if (!isCurrentRun(profile, state, runToken, generation, pageHref) || state.phase !== "cooldown") return;
           state.cooldownTimer = 0;
           state.phase = "completed";
+          const shouldRunPending = state.pendingActivation;
+          state.pendingActivation = false;
+          if (shouldRunPending && findTarget(profile.trigger?.target, { requireVisible: true })) {
+            queueProfile(profile, "elementVisible");
+          }
           scheduleAutoRun();
         }, Math.max(0, Number(options.cooldownMs) || 0));
       }
@@ -341,7 +366,8 @@
     state.wasSatisfied = satisfied;
     const options = profile.trigger?.options || {};
     if (becameSatisfied && (state.runCount === 0 || options.retriggerWhenReappears)) {
-      queueProfile(profile, "elementVisible");
+      const queued = queueProfile(profile, "elementVisible");
+      if (!queued && state.phase === "cooldown") state.pendingActivation = true;
     }
   }
 
