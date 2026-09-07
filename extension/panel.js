@@ -17,11 +17,6 @@
     wait: "等待出现",
     delay: "等待时间"
   });
-  const TRIGGER_LABELS = Object.freeze({
-    pageLoad: "页面加载",
-    elementVisible: "元素出现",
-    userClick: "用户点击"
-  });
   const state = {
     profiles: [],
     activeId: "",

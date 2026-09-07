@@ -10,9 +10,15 @@ const BASE_ORIGIN = "https://atrust.inforbus.com";
 const DYNAMIC_PREFIX = "autofill-profile-";
 
 async function ensureStorage() {
-  const stored = await chrome.storage.local.get(["profiles", "globalEnabled", "enabled", "username", "password"]);
+  const stored = await chrome.storage.local.get(["profiles", "globalEnabled", "enabled", "username", "password", "schemaVersion"]);
   if (Array.isArray(stored.profiles)) {
-    if (typeof stored.globalEnabled !== "boolean") await chrome.storage.local.set({ globalEnabled: true });
+    const normalizedProfiles = stored.profiles.map(normalizeProfile);
+    const updates = {
+      schemaVersion: Math.max(3, Number(stored.schemaVersion) || 0),
+      profiles: normalizedProfiles
+    };
+    if (typeof stored.globalEnabled !== "boolean") updates.globalEnabled = true;
+    await chrome.storage.local.set(updates);
     return;
   }
 
