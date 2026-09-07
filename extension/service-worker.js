@@ -9,14 +9,16 @@ const {
 
 const BASE_ORIGIN = "https://atrust.inforbus.com";
 const DYNAMIC_PREFIX = "autofill-profile-";
+let initializationPromise = null;
 
 async function ensureStorage() {
-  const stored = await chrome.storage.local.get(["profiles", "globalEnabled", "enabled", "username", "password", "schemaVersion"]);
+  const stored = await chrome.storage.local.get(["profiles", "globalEnabled", "enabled", "username", "password", "schemaVersion", "revision"]);
   if (Array.isArray(stored.profiles)) {
     const normalizedProfiles = stored.profiles.map(normalizeProfile);
     const updates = {
-      schemaVersion: Math.max(3, Number(stored.schemaVersion) || 0),
-      profiles: normalizedProfiles
+      schemaVersion: 3,
+      profiles: normalizedProfiles,
+      revision: Math.max(1, Number(stored.revision) || 0)
     };
     if (typeof stored.globalEnabled !== "boolean") updates.globalEnabled = true;
     await chrome.storage.local.set(updates);
@@ -31,8 +33,35 @@ async function ensureStorage() {
     schemaVersion: 3,
     profiles: [profile],
     activeProfileId: profile.id,
-    globalEnabled: typeof stored.globalEnabled === "boolean" ? stored.globalEnabled : true
+    globalEnabled: typeof stored.globalEnabled === "boolean" ? stored.globalEnabled : true,
+    revision: 1
   });
+}
+
+let writeChain = Promise.resolve();
+
+function writeState(message, sendResponse) {
+  writeChain = writeChain.then(async () => {
+    await ensureInitialized();
+    const expectedRevision = Number(message.expectedRevision);
+    const stored = await chrome.storage.local.get("revision");
+    const currentRevision = Number(stored.revision) || 0;
+    if (Number.isFinite(expectedRevision) && expectedRevision !== currentRevision) {
+      throw new Error("配置已被其他面板修改，请刷新后重试");
+    }
+    const nextState = message.state && typeof message.state === "object" ? message.state : {};
+    const profiles = Array.isArray(nextState.profiles) ? nextState.profiles.map(normalizeProfile) : [];
+    const revision = currentRevision + 1;
+    await chrome.storage.local.set({
+      schemaVersion: 3,
+      profiles,
+      activeProfileId: typeof nextState.activeProfileId === "string" ? nextState.activeProfileId : "",
+      globalEnabled: nextState.globalEnabled !== false,
+      revision
+    });
+    return { ok: true, revision };
+  }).then(sendResponse).catch((error) => sendResponse({ ok: false, message: error.message || "配置写入失败" }));
+  return true;
 }
 
 function scriptIdForOrigin(origin) {
@@ -87,14 +116,21 @@ async function initialize() {
   await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 }
 
-chrome.runtime.onInstalled.addListener(() => initialize().catch(console.error));
-chrome.runtime.onStartup.addListener(() => initialize().catch(console.error));
+function ensureInitialized() {
+  if (!initializationPromise) initializationPromise = initialize();
+  return initializationPromise;
+}
+
+chrome.runtime.onInstalled.addListener(() => ensureInitialized().catch(console.error));
+chrome.runtime.onStartup.addListener(() => ensureInitialized().catch(console.error));
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "local" && changes.profiles) syncContentScripts().catch(console.error);
 });
 
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "writeState") return writeState(message, sendResponse);
   if (message?.type === "syncContentScripts") syncContentScripts().catch(console.error);
+  return false;
 });
 
-initialize().catch(console.error);
+ensureInitialized().catch(console.error);

@@ -21,6 +21,7 @@
   });
   const state = {
     profiles: [],
+    revision: 0,
     activeId: "",
     view: "overview",
     editorMode: "edit",
@@ -448,14 +449,19 @@
     return { profiles: nextProfiles, report };
   }
 
-  async function persistState() {
-    await chrome.storage.local.set({
-      schemaVersion: 3,
-      profiles: state.profiles,
-      activeProfileId: state.activeId,
-      globalEnabled: state.globalEnabled
+  async function persistState({ activeProfileId = state.activeId } = {}) {
+    const result = await chrome.runtime.sendMessage({
+      type: "writeState",
+      expectedRevision: state.revision,
+      state: {
+        schemaVersion: 3,
+        profiles: state.profiles,
+        activeProfileId,
+        globalEnabled: state.globalEnabled
+      }
     });
-    await chrome.runtime.sendMessage({ type: "syncContentScripts" }).catch(() => undefined);
+    if (!result?.ok) throw new Error(result?.message || "配置已被其他面板修改，请刷新后重试");
+    state.revision = Number(result.revision) || state.revision + 1;
   }
 
   function setImportMode(mode) {
@@ -572,7 +578,8 @@
   }
 
   async function loadProfiles() {
-    const stored = await chrome.storage.local.get({ profiles: [], activeProfileId: "", globalEnabled: true });
+    const stored = await chrome.storage.local.get({ profiles: [], activeProfileId: "", globalEnabled: true, revision: 0 });
+    state.revision = Number(stored.revision) || 0;
     state.globalEnabled = stored.globalEnabled !== false;
     $("#globalEnabled").checked = state.globalEnabled;
     state.profiles = Array.isArray(stored.profiles) && stored.profiles.length
@@ -915,8 +922,7 @@
       }
       await ensurePermission(profile);
       const saved = commitEditorProfile(profile, isNew);
-      await chrome.storage.local.set({ schemaVersion: 3, profiles: state.profiles, activeProfileId: "", globalEnabled: state.globalEnabled });
-      await chrome.runtime.sendMessage({ type: "syncContentScripts" }).catch(() => undefined);
+      await persistState({ activeProfileId: "" });
       state.editorDraft = copyProfile(saved);
       state.editorMode = "edit";
       state.editorDirty = false;
@@ -983,7 +989,7 @@
     state.profiles = state.profiles.filter((item) => item.id !== profile.id);
     state.collapsedStepsByProfile.delete(profile.id);
     resetEditorState();
-    await chrome.storage.local.set({ profiles: state.profiles, activeProfileId: "", globalEnabled: state.globalEnabled });
+    await persistState({ activeProfileId: "" });
     render();
     setStatus("规则已删除。", false);
   }
@@ -1075,8 +1081,14 @@
   $("#backToProfiles").addEventListener("click", goToOverview);
   $("#globalEnabled").addEventListener("change", async (event) => {
     state.globalEnabled = event.target.checked;
-    await chrome.storage.local.set({ globalEnabled: state.globalEnabled });
-    setStatus(state.globalEnabled ? "总开关已开启，自动流程恢复。" : "总开关已关闭，自动流程暂停。", false);
+    try {
+      await persistState();
+      setStatus(state.globalEnabled ? "总开关已开启，自动流程恢复。" : "总开关已关闭，自动流程暂停。", false);
+    } catch (error) {
+      state.globalEnabled = !state.globalEnabled;
+      event.target.checked = state.globalEnabled;
+      setStatus(error.message || "更新总开关失败。", true);
+    }
   });
   $("#addStep").addEventListener("click", () => {
     const profile = activeProfile();
