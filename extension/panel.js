@@ -776,7 +776,11 @@
     editor.hidden = false;
     $("#editorModeLabel").textContent = state.editorMode === "new" ? "新建规则" : "编辑规则";
     $("#editorHeading").textContent = profile.name;
-    $("#profileEnabled").checked = profile.enabled;
+    const profileToggle = $("#profileEnabled");
+    const isNewProfile = state.editorMode === "new";
+    profileToggle.checked = profile.enabled;
+    profileToggle.disabled = isNewProfile;
+    profileToggle.closest(".switch").title = isNewProfile ? "保存规则后可启用或停用" : "立即启用或停用此规则";
     $("#profileName").value = profile.name;
     $("#siteOrigin").value = profile.site.origin;
     $("#sitePath").value = profile.site.pathPrefix;
@@ -949,6 +953,28 @@
     setStatus("规则已删除。", false);
   }
 
+  async function setProfileEnabled(enabled) {
+    const draft = state.editorDraft;
+    if (!draft || state.editorMode === "new") return;
+    const saved = state.profiles.find((item) => item.id === draft.id);
+    if (!saved) return;
+    const previous = saved.enabled;
+    const nextEnabled = Boolean(enabled);
+    draft.enabled = nextEnabled;
+    saved.enabled = nextEnabled;
+    renderProfiles();
+    try {
+      await persistState();
+      setStatus(nextEnabled ? "规则已启用，当前页面不追溯执行。" : "规则已停用，当前页面立即停止后续自动执行。", false);
+    } catch (error) {
+      saved.enabled = previous;
+      draft.enabled = previous;
+      $("#profileEnabled").checked = previous;
+      renderProfiles();
+      setStatus(error.message || "更新规则开关失败。", true);
+    }
+  }
+
   $("#newProfile").addEventListener("click", () => newProfile());
   $("#quickNewProfile").addEventListener("click", () => newProfile({ useCurrentPage: true }));
   $("#newProfileFromUrl").addEventListener("click", () => {
@@ -1033,7 +1059,7 @@
   $("#saveProfile").addEventListener("click", () => saveProfile(false));
   $("#testProfile").addEventListener("click", () => saveProfile(true));
   $("#deleteProfile").addEventListener("click", deleteProfile);
-  $("#profileEnabled").addEventListener("change", (event) => { const profile = activeProfile(); if (profile) { profile.enabled = event.target.checked; markEditorDirty(); renderProfiles(); } });
+  $("#profileEnabled").addEventListener("change", (event) => setProfileEnabled(event.target.checked));
   $("#profileName").addEventListener("input", (event) => { const profile = activeProfile(); if (profile) { profile.name = event.target.value; markEditorDirty(); $("#editorHeading").textContent = profile.name || "未命名规则"; } });
   $("#siteOrigin").addEventListener("input", (event) => { const profile = activeProfile(); if (profile) { profile.site.origin = event.target.value.trim(); markEditorDirty(); } });
   $("#sitePath").addEventListener("input", (event) => { const profile = activeProfile(); if (profile) { profile.site.pathPrefix = event.target.value.trim(); markEditorDirty(); } });

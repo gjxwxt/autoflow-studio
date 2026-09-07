@@ -12,6 +12,7 @@
   let drainingQueue = false;
   const runQueue = [];
   const ruleStates = new Map();
+  const deferredPageLoadIds = new Set();
 
   const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -162,6 +163,20 @@
     for (const state of ruleStates.values()) state.controller?.abort();
     ruleStates.clear();
     runQueue.length = 0;
+    deferredPageLoadIds.clear();
+  }
+
+  function primeAfterSettingsChange() {
+    resetRuntimeStates();
+    if (!globalEnabled) return;
+    for (const profile of matchingProfiles()) {
+      const state = ruleState(profile);
+      const triggerType = profile.trigger?.type || "pageLoad";
+      if (triggerType === "pageLoad") deferredPageLoadIds.add(profile.id);
+      if (triggerType === "elementVisible") {
+        state.wasSatisfied = Boolean(findTarget(profile.trigger?.target, { requireVisible: true }));
+      }
+    }
   }
 
   function canQueue(profile, state) {
@@ -256,6 +271,7 @@
   const TRIGGER_HANDLERS = Object.freeze({
     pageLoad: {
       onScan: ({ profile, state }) => {
+        if (deferredPageLoadIds.has(profile.id)) return;
         if (state.runCount === 0) queueProfile(profile, "pageLoad");
       }
     },
@@ -464,15 +480,20 @@
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
+    let settingsChanged = false;
     if (changes.profiles) {
       profiles = Array.isArray(changes.profiles.newValue) ? changes.profiles.newValue.map(normalizeProfile) : [];
-      resetRuntimeStates();
+      settingsChanged = true;
     }
     if (changes.globalEnabled) {
       globalEnabled = changes.globalEnabled.newValue !== false;
-      resetRuntimeStates();
+      settingsChanged = true;
     }
-    if (changes.profiles || changes.globalEnabled) scheduleAutoRun();
+    if (settingsChanged) {
+      if (globalEnabled) primeAfterSettingsChange();
+      else resetRuntimeStates();
+      scheduleAutoRun();
+    }
   });
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
