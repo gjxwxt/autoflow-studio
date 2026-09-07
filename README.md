@@ -2,7 +2,7 @@
 
 AutoFlow Studio 是一个本地优先的 Chrome 扩展，用可视化站点规则描述网页元素、填充值和操作流程，帮助复用重复的登录、填表和页面操作。
 
-当前 `v2.6.0` 是第一版基线，支持：
+当前 `v2.7.0` 在 `v2.6.0` 第一版基线之上，支持：
 
 - Chrome Side Panel 中管理多个网站和页面规则；
 - 通过页面拾取器选择 DOM 元素；
@@ -25,10 +25,19 @@ AutoFlow Studio 是一个本地优先的 Chrome 扩展，用可视化站点规�
 
 - `v2.6.0`：页面加载型自动化规则基线。
 - `feat/phase-2-trigger-engine`：条件触发、多规则调度和可扩展触发器架构。
-- 下一阶段：先加固执行可靠性、取消、页面生命周期和数据安全，再扩展内部运行边界。
+- `v2.7.0`：执行队列、取消、页面生命周期和数据安全加固。
+- 下一阶段：在稳定边界内继续增加内部触发器和动作定义。
 
 二期设计和验收标准见 [`PHASE-2-TRIGGER-ENGINE-PLAN.md`](PHASE-2-TRIGGER-ENGINE-PLAN.md)。
 下一阶段执行计划见 [`PHASE-3-EXECUTION-RELIABILITY-PLAN.md`](PHASE-3-EXECUTION-RELIABILITY-PLAN.md)。
+
+## 验证
+
+```bash
+node --test tests/*.test.mjs
+```
+
+浏览器 fixture 还覆盖了手动队列、取消、可信点击、SPA 导航和页面不匹配拒绝；测试使用虚拟数据，不使用真实账号、密码或 Cookie。
 
 ## 安全说明
 

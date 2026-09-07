@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AutoFlow Studio",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "description": "用可视化页面规则为多个网站填充字段并按顺序执行操作。",
   "permissions": [
     "storage",
