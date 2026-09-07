@@ -2,7 +2,7 @@
   if (window.__autoFillStudioLoaded) return;
   window.__autoFillStudioLoaded = true;
 
-  const { matchesProfile, normalizeProfile, targetSummary } = AutoFillShared;
+  const { isSupportedProfile, matchesProfile, normalizeProfile, targetSummary } = AutoFillShared;
   const DEFAULTS = { profiles: [], activeProfileId: "", globalEnabled: true };
   let profiles = [];
   let globalEnabled = true;
@@ -355,6 +355,7 @@
 
   async function applyProfile(profile, force = false) {
     const normalized = normalizeProfile(profile);
+    if (!isSupportedProfile(normalized)) return { ok: false, message: "规则包含当前版本不支持的动作或数据版本" };
     if (!force && (!normalized.enabled || !globalEnabled || !matchesProfile(normalized, location.href))) {
       return { ok: false, skipped: true, message: "规则未启用或不匹配当前页面" };
     }
@@ -410,7 +411,7 @@
       ariaLabel: element.getAttribute("aria-label") || "",
       role: element.getAttribute("role") || "",
       type: element.getAttribute("type") || "",
-      text: cleanText(element.innerText || element.value).slice(0, 80),
+      text: ["input", "textarea", "select"].includes(tag) ? "" : cleanText(element.innerText).slice(0, 80),
       css: uniqueCssSelector(element)
     };
   }
@@ -472,7 +473,7 @@
 
   async function loadSettings() {
     const stored = await chrome.storage.local.get(DEFAULTS);
-    profiles = Array.isArray(stored.profiles) ? stored.profiles.map(normalizeProfile) : [];
+    profiles = Array.isArray(stored.profiles) ? stored.profiles.map(normalizeProfile).filter(isSupportedProfile) : [];
     globalEnabled = stored.globalEnabled !== false;
     resetRuntimeStates();
     scheduleAutoRun();
@@ -482,7 +483,7 @@
     if (areaName !== "local") return;
     let settingsChanged = false;
     if (changes.profiles) {
-      profiles = Array.isArray(changes.profiles.newValue) ? changes.profiles.newValue.map(normalizeProfile) : [];
+      profiles = Array.isArray(changes.profiles.newValue) ? changes.profiles.newValue.map(normalizeProfile).filter(isSupportedProfile) : [];
       settingsChanged = true;
     }
     if (changes.globalEnabled) {

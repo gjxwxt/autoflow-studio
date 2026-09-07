@@ -1,5 +1,9 @@
 (() => {
   const deepClone = (value) => JSON.parse(JSON.stringify(value));
+  const CURRENT_SCHEMA_VERSION = 3;
+  const UNSUPPORTED_ACTION = "__unsupported__";
+  const SUPPORTED_ACTIONS = Object.freeze(["fill", "check", "click", "select", "wait", "delay"]);
+  const TARGET_KEYS = Object.freeze(["tag", "id", "name", "placeholder", "ariaLabel", "role", "type", "text", "css"]);
 
   const DEFAULT_ATRUST_PROFILE = {
     id: "atrust-login",
@@ -65,17 +69,48 @@
     };
   }
 
+  function isValueBearingTarget(target = {}) {
+    const tag = String(target.tag || "").toLowerCase();
+    return tag === "input" || tag === "textarea" || tag === "select";
+  }
+
+  function normalizeTarget(rawTarget) {
+    const source = rawTarget && typeof rawTarget === "object" ? rawTarget : {};
+    const target = {};
+    for (const key of TARGET_KEYS) {
+      if (source[key] === undefined || source[key] === null) continue;
+      if (key === "text" && isValueBearingTarget(source)) continue;
+      target[key] = typeof source[key] === "string" ? source[key].trim() : source[key];
+    }
+    return target;
+  }
+
+  function boundedNumber(value, fallback, minimum, maximum) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return fallback;
+    return Math.max(minimum, Math.min(number, maximum));
+  }
+
   function normalizeProfile(profile) {
     const next = deepClone(profile || {});
     next.id = next.id || createId("profile");
     next.name = next.name || "未命名站点";
     next.enabled = Boolean(next.enabled);
-    next.schemaVersion = Math.max(3, Number(next.schemaVersion) || 0);
+    const sourceSchemaVersion = Number(next.schemaVersion);
+    const markedUnsupportedVersion = Number(next.unsupportedSchemaVersion);
+    next.unsupportedSchemaVersion = Number.isFinite(markedUnsupportedVersion) && markedUnsupportedVersion > CURRENT_SCHEMA_VERSION
+      ? markedUnsupportedVersion
+      : Number.isFinite(sourceSchemaVersion) && sourceSchemaVersion > CURRENT_SCHEMA_VERSION
+        ? sourceSchemaVersion
+        : 0;
+    next.schemaVersion = CURRENT_SCHEMA_VERSION;
     next.site = next.site || { origin: "", pathPrefix: "", hashPrefix: "" };
     next.site.origin = next.site.origin || "";
     next.site.pathPrefix = next.site.pathPrefix || "";
     next.site.hashPrefix = next.site.hashPrefix || "";
-    const incomingTrigger = next.trigger || {};
+    const incomingTrigger = next.trigger && typeof next.trigger === "object" ? next.trigger : {};
+    const legacySubmitEnabled = Boolean(incomingTrigger.enabled);
+    const legacySubmitTarget = normalizeTarget(incomingTrigger.target);
     const incomingTriggerType = ["pageLoad", "elementVisible", "userClick"].includes(incomingTrigger.type)
       ? incomingTrigger.type
       : "pageLoad";
@@ -86,19 +121,19 @@
     const oncePerPage = !repeatMode;
     next.trigger = {
       type: incomingTriggerType,
-      target: incomingTrigger.target || {},
+      target: normalizeTarget(incomingTrigger.target),
       options: {
         oncePerPage,
         retriggerWhenReappears: incomingTriggerType === "elementVisible" && repeatMode,
-        cooldownMs: Math.max(0, Math.min(Number(incomingTrigger.options?.cooldownMs) || 1500, 30000)),
-        timeoutMs: Math.max(1000, Math.min(Number(incomingTrigger.options?.timeoutMs) || 30000, 120000)),
+        cooldownMs: boundedNumber(incomingTrigger.options?.cooldownMs, 1500, 0, 30000),
+        timeoutMs: boundedNumber(incomingTrigger.options?.timeoutMs, 30000, 1000, 120000),
         maxRuns: repeatMode ? 50 : 1
       }
     };
     if (!Array.isArray(next.steps)) {
       const legacySteps = Array.isArray(next.fields) ? next.fields : [];
       next.steps = legacySteps.map((field) => ({ ...field }));
-      if (next.trigger?.enabled && next.trigger.target) {
+      if (legacySubmitEnabled && Object.keys(legacySubmitTarget).length) {
         next.steps.push({
           id: createId("step"),
           label: "提交",
@@ -106,21 +141,80 @@
           secret: false,
           value: "",
           enabled: true,
-          target: next.trigger.target
+          target: legacySubmitTarget
         });
       }
     }
-    next.steps = next.steps.map((field) => ({
-      id: field.id || createId("field"),
-      label: field.label || "步骤",
-      action: ["fill", "check", "click", "select", "wait", "delay"].includes(field.action) ? field.action : "fill",
-      secret: Boolean(field.secret),
-      value: field.value ?? "",
-      enabled: field.enabled !== false,
-      timeoutMs: Number.isFinite(Number(field.timeoutMs)) ? Number(field.timeoutMs) : 12000,
-      target: field.target || {}
-    }));
+    next.steps = next.steps.map((field) => {
+      const rawAction = field?.action;
+      const hasExplicitAction = rawAction !== undefined && rawAction !== null && rawAction !== "";
+      const action = !hasExplicitAction
+        ? "fill"
+        : SUPPORTED_ACTIONS.includes(rawAction)
+          ? rawAction
+          : UNSUPPORTED_ACTION;
+      const step = {
+        id: field.id || createId("field"),
+        label: field.label || "步骤",
+        action,
+        secret: Boolean(field.secret),
+        value: field.value ?? "",
+        enabled: field.enabled !== false && action !== UNSUPPORTED_ACTION,
+        timeoutMs: boundedNumber(field.timeoutMs, 12000, 1000, 120000),
+        target: normalizeTarget(field.target)
+      };
+      if (action === UNSUPPORTED_ACTION) step.unsupportedAction = String(rawAction);
+      return step;
+    });
     return next;
+  }
+
+  function isSupportedProfile(profile) {
+    const normalized = profile && profile.schemaVersion === CURRENT_SCHEMA_VERSION ? profile : normalizeProfile(profile);
+    return normalized.unsupportedSchemaVersion === 0
+      && Array.isArray(normalized.steps)
+      && normalized.steps.every((step) => SUPPORTED_ACTIONS.includes(step.action));
+  }
+
+  function exportProfileData(profile, includeSecrets = false) {
+    const source = normalizeProfile(profile);
+    const exported = {
+      id: source.id,
+      name: source.name,
+      enabled: Boolean(source.enabled),
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      site: {
+        origin: source.site.origin,
+        pathPrefix: source.site.pathPrefix,
+        hashPrefix: source.site.hashPrefix
+      },
+      trigger: {
+        type: source.trigger.type,
+        target: normalizeTarget(source.trigger.target),
+        options: {
+          oncePerPage: source.trigger.options.oncePerPage !== false,
+          retriggerWhenReappears: Boolean(source.trigger.options.retriggerWhenReappears),
+          cooldownMs: boundedNumber(source.trigger.options.cooldownMs, 1500, 0, 30000),
+          timeoutMs: boundedNumber(source.trigger.options.timeoutMs, 30000, 1000, 120000),
+          maxRuns: boundedNumber(source.trigger.options.maxRuns, 1, 1, 50)
+        }
+      },
+      steps: source.steps.map((step) => {
+        const exportedStep = {
+          id: step.id,
+          label: step.label,
+          action: step.action,
+          secret: Boolean(step.secret),
+          enabled: step.enabled !== false,
+          timeoutMs: boundedNumber(step.timeoutMs, 12000, 1000, 120000),
+          target: normalizeTarget(step.target)
+        };
+        if (includeSecrets) exportedStep.value = step.value ?? "";
+        return exportedStep;
+      })
+    };
+    if (source.unsupportedSchemaVersion > 0) exported.unsupportedSchemaVersion = source.unsupportedSchemaVersion;
+    return exported;
   }
 
   function matchesProfile(profile, href) {
@@ -155,9 +249,16 @@
     copyProfile,
     createId,
     deepClone,
+    exportProfileData,
+    isSupportedProfile,
+    isValueBearingTarget,
     matchesProfile,
+    boundedNumber,
     normalizeOrigin,
     normalizeProfile,
+    normalizeTarget,
+    SUPPORTED_ACTIONS,
+    UNSUPPORTED_ACTION,
     siteFromUrl,
     targetSummary
   };

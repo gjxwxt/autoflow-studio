@@ -3,6 +3,8 @@
     DEFAULT_ATRUST_PROFILE,
     copyProfile,
     createId,
+    exportProfileData,
+    isSupportedProfile,
     normalizeOrigin,
     normalizeProfile,
     siteFromUrl,
@@ -174,13 +176,7 @@
   }
 
   function exportProfile(profile, includeSecrets) {
-    const exported = copyProfile(profile);
-    if (!includeSecrets) {
-      exported.steps.forEach((step) => {
-        if (step.secret || step.action === "fill") step.value = "";
-      });
-    }
-    return exported;
+    return exportProfileData(profile, includeSecrets);
   }
 
   function makeExportPayload(kind, profiles, includeSecrets) {
@@ -359,6 +355,21 @@
     ]);
   }
 
+  function stepBindingKey(step) {
+    const target = step?.target || {};
+    return JSON.stringify([
+      step?.action || "",
+      target.id || "",
+      target.name || "",
+      target.placeholder || "",
+      target.ariaLabel || "",
+      target.role || "",
+      target.type || "",
+      target.css || "",
+      target.text || ""
+    ]);
+  }
+
   function findMergeStep(localSteps, incomingStep, usedIndexes) {
     let index = localSteps.findIndex((step, stepIndex) => !usedIndexes.has(stepIndex) && step.id && step.id === incomingStep.id);
     if (index >= 0) return index;
@@ -378,6 +389,7 @@
     const localSteps = Array.isArray(localProfile.steps) ? localProfile.steps : [];
     const usedIndexes = new Set();
     let valueConflicts = 0;
+    let structuralConflicts = 0;
 
     merged.id = localProfile.id;
     merged.name = localProfile.name || merged.name;
@@ -389,29 +401,41 @@
           usedIndexes.add(localIndex);
           const localStep = localSteps[localIndex];
           const next = { ...incomingStep, id: localStep.id || incomingStep.id };
+          const bindingUnchanged = stepBindingKey(localStep) === stepBindingKey(incomingStep);
           const localHasValue = hasMeaningfulValue(localStep.value);
           const incomingHasValue = hasMeaningfulValue(incomingStep.value);
-          if (localHasValue && incomingHasValue && JSON.stringify(localStep.value) !== JSON.stringify(incomingStep.value)) valueConflicts += 1;
-          next.value = localHasValue ? localStep.value : incomingStep.value;
-          next.enabled = localStep.enabled !== false;
-          next.secret = Boolean(localStep.secret || incomingStep.secret);
+          if (!bindingUnchanged) {
+            structuralConflicts += 1;
+            next.value = incomingStep.value;
+            next.enabled = false;
+            next.secret = Boolean(incomingStep.secret);
+          } else {
+            if (localHasValue && incomingHasValue && JSON.stringify(localStep.value) !== JSON.stringify(incomingStep.value)) valueConflicts += 1;
+            next.value = localHasValue ? localStep.value : incomingStep.value;
+            next.enabled = localStep.enabled !== false;
+            next.secret = Boolean(localStep.secret || incomingStep.secret);
+          }
           return next;
         })
       : localSteps.map((step) => ({ ...step }));
 
-    return { profile: merged, valueConflicts };
+    if (structuralConflicts) merged.enabled = false;
+
+    return { profile: merged, valueConflicts, structuralConflicts };
   }
 
   function mergeSharedProfiles(incomingProfiles, existingProfiles) {
     const nextProfiles = existingProfiles.map(copyProfile);
-    const report = { added: 0, merged: 0, valueConflicts: 0 };
+    const report = { added: 0, merged: 0, valueConflicts: 0, structuralConflicts: 0 };
     for (const incomingProfile of incomingProfiles) {
       const key = profileMatchKey(incomingProfile);
       const existingIndex = key
         ? nextProfiles.findIndex((profile) => profileMatchKey(profile) === key)
         : -1;
       if (existingIndex < 0) {
-        nextProfiles.unshift(rekeyProfile(incomingProfile));
+        const imported = rekeyProfile(incomingProfile);
+        imported.enabled = false;
+        nextProfiles.unshift(imported);
         report.added += 1;
         continue;
       }
@@ -419,6 +443,7 @@
       nextProfiles[existingIndex] = result.profile;
       report.merged += 1;
       report.valueConflicts += result.valueConflicts;
+      report.structuralConflicts += result.structuralConflicts;
     }
     return { profiles: nextProfiles, report };
   }
@@ -462,6 +487,9 @@
     }
     if (payload.profiles.length > 200) throw new Error("文件中的规则数量过多");
     const incoming = payload.profiles.map(normalizeProfile);
+    if (incoming.some((profile) => !isSupportedProfile(profile))) {
+      throw new Error("文件包含当前版本不支持的规则动作或数据版本，请先升级插件后再导入");
+    }
     let shareReport = null;
     if (payload.kind === "backup") {
       const passwordNote = payload.secretsIncluded ? "其中可能包含密码。" : "密码字段为空。";
@@ -471,7 +499,7 @@
     } else {
       if (!incoming.length) throw new Error("分享文件中没有可导入的规则");
       const result = mergeSharedProfiles(incoming, state.profiles);
-      const summary = `将新增 ${result.report.added} 条、合并 ${result.report.merged} 条页面规则。重复规则合并时保留本地已有值，有值冲突时以本地为准。`;
+      const summary = `将新增 ${result.report.added} 条、合并 ${result.report.merged} 条页面规则。重复规则保留本地填充值；元素或动作发生变化的规则会先停用，确认后可检查并重新启用。`;
       if (!window.confirm(summary + "\n\n确定继续吗？")) return false;
       state.profiles = result.profiles;
       shareReport = result.report;
@@ -484,9 +512,10 @@
     if (payload.kind === "backup") {
       setStatus("完整备份已导入。首次使用各域名时可能需要重新授权。", false);
     } else {
-      const report = shareReport || { added: incoming.length, merged: 0, valueConflicts: 0 };
+      const report = shareReport || { added: incoming.length, merged: 0, valueConflicts: 0, structuralConflicts: 0 };
       const conflictNote = report.valueConflicts ? `，${report.valueConflicts} 个值冲突按本地保留` : "";
-      setStatus(`规则已导入：新增 ${report.added} 条，合并 ${report.merged} 条${conflictNote}。`, false);
+      const structuralNote = report.structuralConflicts ? `，${report.structuralConflicts} 条元素发生变化已停用待检查` : "";
+      setStatus(`规则已导入：新增 ${report.added} 条，合并 ${report.merged} 条${conflictNote}${structuralNote}。`, false);
     }
     return true;
   }

@@ -3,7 +3,8 @@ importScripts("shared.js");
 const {
   DEFAULT_ATRUST_PROFILE,
   copyProfile,
-  normalizeOrigin
+  normalizeOrigin,
+  normalizeProfile
 } = AutoFillShared;
 
 const BASE_ORIGIN = "https://atrust.inforbus.com";
