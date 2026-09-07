@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "AutoFlow Studio",
+  "version": "2.6.0",
+  "description": "用可视化页面规则为多个网站填充字段并按顺序执行操作。",
+  "permissions": [
+    "storage",
+    "sidePanel",
+    "scripting",
+    "activeTab",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://atrust.inforbus.com/portal/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "action": {
+    "default_title": "打开 AutoFlow Studio"
+  },
+  "side_panel": {
+    "default_path": "panel.html"
+  },
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://atrust.inforbus.com/portal/*"
+      ],
+      "js": [
+        "shared.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Delayed Login Fixture</title>
+    <style>
+      body { margin: 0; padding: 48px; background: #f5f4f7; color: #25202b; font: 16px system-ui, sans-serif; }
+      main { max-width: 420px; margin: auto; padding: 28px; border: 1px solid #ded8e4; border-radius: 14px; background: #fff; }
+      form { display: grid; gap: 12px; margin-top: 20px; }
+      input { padding: 10px; border: 1px solid #c9c1d1; border-radius: 8px; }
+      button { padding: 10px 12px; border: 0; border-radius: 8px; background: #84245d; color: #fff; cursor: pointer; }
+      #result { margin-top: 14px; color: #287a4d; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Delayed Login Fixture</h1>
+      <p id="hint">表单尚未加载。</p>
+      <button id="passwordLogin" type="button">使用密码登录</button>
+      <div id="formMount"></div>
+      <div id="result" aria-live="polite"></div>
+    </main>
+    <script>
+      document.querySelector('#passwordLogin').addEventListener('click', () => {
+        document.querySelector('#hint').textContent = '密码登录已选择，正在加载表单…';
+        setTimeout(() => {
+          document.querySelector('#formMount').innerHTML = `
+            <form id="loginForm">
+              <input id="fixtureUser" placeholder="测试用户名" />
+              <input id="fixturePass" type="password" placeholder="测试密码" />
+              <label><input id="fixtureAgree" type="checkbox" /> 同意测试条款</label>
+              <button id="fixtureSubmit" type="submit">进入测试页</button>
+            </form>`;
+          document.querySelector('#hint').textContent = '表单已加载。';
+          document.querySelector('#loginForm').addEventListener('submit', (event) => {
+            event.preventDefault();
+            document.querySelector('#result').textContent = '流程已提交';
+          });
+        }, 650);
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head><meta charset="UTF-8" /><title>Simple Form Fixture</title></head>
+  <body style="padding:48px;font:16px system-ui,sans-serif">
+    <h1>Simple Form Fixture</h1>
+    <label>显示名称 <input id="displayName" placeholder="输入显示名称" /></label>
+    <label>角色 <select id="role"><option value="reader">阅读者</option><option value="admin">管理员</option></select></label>
+    <button id="saveFixture" type="button">保存测试值</button>
+    <p id="result" aria-live="polite"></p>
+    <script>
+      document.querySelector('#saveFixture').addEventListener('click', () => {
+        document.querySelector('#result').textContent = `${document.querySelector('#displayName').value} / ${document.querySelector('#role').value}`;
+      });
+    </script>
+  </body>
+</html>
