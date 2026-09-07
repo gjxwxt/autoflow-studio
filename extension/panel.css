@@ -49,7 +49,8 @@ h3 { font-size: 13px; line-height: 1.3; }
 .permission-badge.ok { background: color-mix(in oklch, var(--success) 13%, white); color: color-mix(in oklch, var(--success) 82%, black); }
 .permission-badge.warn { background: color-mix(in oklch, var(--danger) 10%, white); color: color-mix(in oklch, var(--danger) 82%, black); }
 
-.profile-section { display: flex; min-height: 0; flex: 1; flex-direction: column; margin-bottom: 20px; }
+.profile-section { position: relative; display: flex; min-height: 0; flex: 1; flex-direction: column; margin-bottom: 20px; }
+.profile-section::before { content: ""; position: absolute; top: -11px; left: 0; right: 0; border-top: 1px solid var(--line); }
 .profile-section[hidden] { display: none; }
 .section-heading { align-items: flex-end; margin-bottom: 10px; }
 .section-heading > div, .editor-heading > div { display: grid; gap: 3px; }
