@@ -7,17 +7,24 @@
   let profiles = [];
   let globalEnabled = true;
   let pickerCleanup = null;
-  let scheduled = false;
-  let runKey = "";
-  let running = false;
+  let scanTimer = 0;
+  let lastUrl = location.href;
+  let drainingQueue = false;
+  const runQueue = [];
+  const ruleStates = new Map();
 
   const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
   function isVisible(element) {
     if (!element || !(element instanceof Element)) return false;
+    if (element.hidden || element.getAttribute("aria-hidden") === "true") return false;
     const rect = element.getBoundingClientRect();
     const style = window.getComputedStyle(element);
-    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    return rect.width > 0
+      && rect.height > 0
+      && style.visibility !== "hidden"
+      && style.display !== "none"
+      && style.opacity !== "0";
   }
 
   function cleanText(value) {
@@ -28,16 +35,17 @@
     return window.CSS?.escape ? window.CSS.escape(value) : String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
   }
 
-  function findByText(target) {
+  function findByText(target, requireVisible = true) {
     if (!target.text) return null;
     const expected = cleanText(target.text);
     const candidates = document.querySelectorAll("button, [role=button], a, input[type=submit]");
-    return [...candidates].find((element) => isVisible(element) && cleanText(element.innerText || element.value) === expected)
-      || [...candidates].find((element) => isVisible(element) && cleanText(element.innerText || element.value).includes(expected))
+    const usable = [...candidates].filter((element) => !requireVisible || isVisible(element));
+    return usable.find((element) => cleanText(element.innerText || element.value) === expected)
+      || usable.find((element) => cleanText(element.innerText || element.value).includes(expected))
       || null;
   }
 
-  function findTarget(target = {}) {
+  function findTarget(target = {}, { requireVisible = true } = {}) {
     const selectors = [];
     if (target.id) selectors.push(`#${cssEscape(target.id)}`);
     if (target.name) selectors.push(`${target.tag || "*"}[name="${String(target.name).replace(/"/g, '\\"')}"]`);
@@ -48,17 +56,18 @@
     for (const selector of selectors) {
       try {
         const element = document.querySelector(selector);
-        if (isVisible(element)) return element;
+        if (element && (!requireVisible || isVisible(element))) return element;
       } catch {
         // An edited selector should not stop other selector strategies.
       }
     }
-    return findByText(target);
+    return findByText(target, requireVisible);
   }
 
-  async function waitForTarget(target, timeoutMs = 8000) {
+  async function waitForTarget(target, timeoutMs = 8000, signal) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      if (signal?.aborted) throw new DOMException("流程已取消", "AbortError");
       const element = findTarget(target);
       if (element) return element;
       await wait(120);
@@ -85,69 +94,263 @@
     return element.querySelector("input, select, textarea") || element;
   }
 
-  async function executeStep(step) {
+  const ACTION_HANDLERS = Object.freeze({
+    wait: async () => ({ ok: true }),
+    check: async ({ input, step }) => {
+      const desired = step.value === true || step.value === "true" || step.value === 1;
+      if (Boolean(input.checked) !== desired) input.click();
+      return { ok: true };
+    },
+    click: async ({ input }) => {
+      input.click();
+      return { ok: true };
+    },
+    select: async ({ input, step }) => {
+      if (!(input instanceof HTMLSelectElement)) return { ok: false, message: "目标元素不是下拉框" };
+      const option = [...input.options].find((item) => item.value === String(step.value) || item.textContent.trim() === String(step.value));
+      setValue(input, option ? option.value : step.value);
+      return { ok: true };
+    },
+    fill: async ({ input, step }) => {
+      setValue(input, step.value ?? "");
+      return { ok: true };
+    }
+  });
+
+  async function executeStep(step, signal) {
     if (step.action === "delay") {
+      if (signal?.aborted) throw new DOMException("流程已取消", "AbortError");
       await wait(Math.max(0, Math.min(Number(step.value) || 0, 30000)));
       return { ok: true };
     }
 
-    const element = await waitForTarget(step.target, Math.max(1000, Math.min(Number(step.timeoutMs) || 12000, 30000)));
+    const element = await waitForTarget(step.target, Math.max(1000, Math.min(Number(step.timeoutMs) || 12000, 30000)), signal);
     if (!element) return { ok: false, message: `找不到：${step.label || targetSummary(step.target)}` };
     const input = inputForLabel(element);
-
-    if (step.action === "wait") return { ok: true };
-    if (step.action === "check") {
-      const desired = step.value === true || step.value === "true" || step.value === 1;
-      if (Boolean(input.checked) !== desired) input.click();
-    } else if (step.action === "click") {
-      input.click();
-    } else if (step.action === "select" && input instanceof HTMLSelectElement) {
-      const option = [...input.options].find((item) => item.value === String(step.value) || item.textContent.trim() === String(step.value));
-      setValue(input, option ? option.value : step.value);
-    } else if (step.action === "fill") {
-      setValue(input, step.value ?? "");
-    }
-    return { ok: true };
+    const handler = ACTION_HANDLERS[step.action];
+    if (!handler) return { ok: false, message: `不支持的动作：${step.action}` };
+    return handler({ element, input, step, signal });
   }
 
-  function matchingProfile() {
-    if (!globalEnabled) return null;
+  function matchingProfiles() {
+    if (!globalEnabled) return [];
     return profiles
       .filter((profile) => profile.enabled && matchesProfile(profile, location.href))
-      .sort((a, b) => `${b.site.pathPrefix}${b.site.hashPrefix}`.length - `${a.site.pathPrefix}${a.site.hashPrefix}`.length)[0] || null;
+      .sort((a, b) => `${b.site.pathPrefix}${b.site.hashPrefix}`.length - `${a.site.pathPrefix}${a.site.hashPrefix}`.length);
   }
 
-  async function applyProfile(profile, force = false) {
-    profile = normalizeProfile(profile);
-    if (!force && (!profile.enabled || !matchesProfile(profile, location.href))) {
-      return { ok: false, skipped: true, message: "规则未启用或不匹配当前页面" };
-    }
+  function ruleState(profile) {
+    const signature = JSON.stringify({ trigger: profile.trigger, steps: profile.steps });
+    const previous = ruleStates.get(profile.id);
+    if (previous?.signature === signature) return previous;
+    previous?.controller?.abort();
+    const next = {
+      signature,
+      phase: "armed",
+      wasSatisfied: false,
+      runCount: 0,
+      queued: false,
+      cooldownUntil: 0,
+      controller: null,
+      lastMessage: ""
+    };
+    ruleStates.set(profile.id, next);
+    return next;
+  }
 
-    const key = `${profile.id}:${location.href}:${JSON.stringify(profile.steps)}`;
-    if (!force && runKey === key) return { ok: true, alreadyRun: true, message: "规则已执行" };
-    if (running) return { ok: false, message: "规则正在执行" };
+  function resetRuntimeStates() {
+    for (const state of ruleStates.values()) state.controller?.abort();
+    ruleStates.clear();
+    runQueue.length = 0;
+  }
 
-    running = true;
+  function canQueue(profile, state) {
+    const options = profile.trigger?.options || {};
+    if (["queued", "running", "cooldown", "failed"].includes(state.phase)) return false;
+    if (Date.now() < state.cooldownUntil) return false;
+    if (state.runCount >= Math.max(1, Number(options.maxRuns) || 1)) return false;
+    if (options.oncePerPage !== false && state.runCount > 0) return false;
+    return true;
+  }
+
+  function queueProfile(profile, reason = "condition") {
+    if (!globalEnabled || !profile?.enabled || !matchesProfile(profile, location.href)) return false;
+    const state = ruleState(profile);
+    if (!canQueue(profile, state)) return false;
+    state.phase = "queued";
+    state.queued = true;
+    runQueue.push({ profile, state, reason });
+    drainQueue().catch(() => undefined);
+    return true;
+  }
+
+  async function executeProfile(profile, state, reason = "condition") {
+    const controller = new AbortController();
+    state.controller = controller;
+    state.phase = "running";
+    state.queued = false;
     try {
       for (const step of profile.steps.filter((item) => item.enabled !== false)) {
-        const result = await executeStep(step);
-        if (!result.ok) return result;
+        const result = await executeStep(step, controller.signal);
+        if (!result.ok) {
+          state.phase = "failed";
+          state.lastMessage = result.message || "流程执行失败";
+          return result;
+        }
       }
-      runKey = key;
-      return { ok: true, message: "流程已执行完成" };
+      state.runCount += 1;
+      state.lastMessage = "流程已执行完成";
+      const options = profile.trigger?.options || {};
+      state.cooldownUntil = Date.now() + Math.max(0, Number(options.cooldownMs) || 0);
+      state.phase = state.cooldownUntil > Date.now() ? "cooldown" : "completed";
+      if (state.phase === "cooldown") {
+        window.setTimeout(() => {
+          if (state.phase !== "cooldown") return;
+          state.phase = "completed";
+          scheduleAutoRun();
+        }, Math.max(0, Number(options.cooldownMs) || 0));
+      }
+      return { ok: true, message: "流程已执行完成", reason };
+    } catch (error) {
+      if (error?.name === "AbortError") return { ok: false, cancelled: true, message: "流程已取消" };
+      state.phase = "failed";
+      state.lastMessage = error?.message || "流程执行失败";
+      return { ok: false, message: state.lastMessage };
     } finally {
-      running = false;
+      state.controller = null;
+      if (state.phase === "running") state.phase = "failed";
+      scheduleAutoRun();
+    }
+  }
+
+  async function drainQueue() {
+    if (drainingQueue) return;
+    drainingQueue = true;
+    try {
+      while (runQueue.length) {
+        const item = runQueue.shift();
+        if (!item) continue;
+        const { profile, state } = item;
+        if (!globalEnabled || !profile.enabled || !matchesProfile(profile, location.href)) {
+          state.phase = "armed";
+          state.queued = false;
+          continue;
+        }
+        await executeProfile(profile, state, item.reason);
+      }
+    } finally {
+      drainingQueue = false;
+    }
+  }
+
+  function evaluateElementVisible(profile, state) {
+    const satisfied = Boolean(findTarget(profile.trigger?.target, { requireVisible: true }));
+    const becameSatisfied = !state.wasSatisfied && satisfied;
+    state.wasSatisfied = satisfied;
+    const options = profile.trigger?.options || {};
+    if (becameSatisfied && (state.runCount === 0 || options.retriggerWhenReappears)) {
+      queueProfile(profile, "elementVisible");
+    }
+  }
+
+  const TRIGGER_HANDLERS = Object.freeze({
+    pageLoad: {
+      onScan: ({ profile, state }) => {
+        if (state.runCount === 0) queueProfile(profile, "pageLoad");
+      }
+    },
+    elementVisible: {
+      onScan: ({ profile, state }) => evaluateElementVisible(profile, state)
+    },
+    userClick: {
+      matchesEvent: ({ event, profile }) => eventMatchesTarget(event, profile.trigger.target)
+    }
+  });
+
+  function evaluateRules() {
+    if (location.href !== lastUrl) {
+      lastUrl = location.href;
+      resetRuntimeStates();
+    }
+    if (!globalEnabled) return;
+    for (const profile of matchingProfiles()) {
+      const state = ruleState(profile);
+      const triggerType = profile.trigger?.type || "pageLoad";
+      TRIGGER_HANDLERS[triggerType]?.onScan?.({ profile, state });
     }
   }
 
   function scheduleAutoRun() {
-    if (scheduled) return;
-    scheduled = true;
-    window.setTimeout(async () => {
-      scheduled = false;
-      const profile = matchingProfile();
-      if (profile) await applyProfile(profile).catch(() => undefined);
-    }, 180);
+    window.clearTimeout(scanTimer);
+    scanTimer = window.setTimeout(evaluateRules, 120);
+  }
+
+  function targetMatchesElement(element, target = {}) {
+    if (!(element instanceof Element)) return false;
+    if (target.id && element.id === target.id) return true;
+    if (target.name && element.getAttribute("name") === target.name) return true;
+    if (target.placeholder && element.getAttribute("placeholder") === target.placeholder) return true;
+    if (target.ariaLabel && element.getAttribute("aria-label") === target.ariaLabel) return true;
+    if (target.css) {
+      try {
+        if (element.matches(target.css)) return true;
+      } catch {
+        // Ignore edited selectors and continue with stable attributes.
+      }
+    }
+    return Boolean(target.text && cleanText(element.innerText || element.value).includes(cleanText(target.text)));
+  }
+
+  function eventMatchesTarget(event, target) {
+    const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
+    return path.some((element) => targetMatchesElement(element, target));
+  }
+
+  function handleUserClick(event) {
+    if (!globalEnabled) return;
+    for (const profile of matchingProfiles()) {
+      const handler = TRIGGER_HANDLERS[profile.trigger?.type];
+      if (handler?.matchesEvent?.({ event, profile })) queueProfile(profile, "userClick");
+    }
+  }
+
+  function resetForNavigation() {
+    if (location.href === lastUrl) return;
+    lastUrl = location.href;
+    resetRuntimeStates();
+    scheduleAutoRun();
+  }
+
+  function patchHistoryNavigation() {
+    for (const method of ["pushState", "replaceState"]) {
+      const original = history[method];
+      if (original.__autoFlowPatched) continue;
+      const wrapped = function (...args) {
+        const result = original.apply(this, args);
+        window.queueMicrotask(resetForNavigation);
+        return result;
+      };
+      wrapped.__autoFlowPatched = true;
+      history[method] = wrapped;
+    }
+    window.addEventListener("hashchange", resetForNavigation, true);
+    window.addEventListener("popstate", resetForNavigation, true);
+  }
+
+  async function applyProfile(profile, force = false) {
+    const normalized = normalizeProfile(profile);
+    if (!force && (!normalized.enabled || !globalEnabled || !matchesProfile(normalized, location.href))) {
+      return { ok: false, skipped: true, message: "规则未启用或不匹配当前页面" };
+    }
+    const state = ruleState(normalized);
+    if (!force) {
+      queueProfile(normalized, "automatic");
+      return { ok: true, queued: true, message: "规则已加入执行队列" };
+    }
+    if (state.phase === "running") return { ok: false, message: "规则正在执行" };
+    state.runCount = 0;
+    state.phase = "armed";
+    return executeProfile(normalized, state, "manual");
   }
 
   function uniqueCssSelector(element) {
@@ -255,6 +458,7 @@
     const stored = await chrome.storage.local.get(DEFAULTS);
     profiles = Array.isArray(stored.profiles) ? stored.profiles.map(normalizeProfile) : [];
     globalEnabled = stored.globalEnabled !== false;
+    resetRuntimeStates();
     scheduleAutoRun();
   }
 
@@ -262,11 +466,11 @@
     if (areaName !== "local") return;
     if (changes.profiles) {
       profiles = Array.isArray(changes.profiles.newValue) ? changes.profiles.newValue.map(normalizeProfile) : [];
-      runKey = "";
+      resetRuntimeStates();
     }
     if (changes.globalEnabled) {
       globalEnabled = changes.globalEnabled.newValue !== false;
-      runKey = "";
+      resetRuntimeStates();
     }
     if (changes.profiles || changes.globalEnabled) scheduleAutoRun();
   });
@@ -294,6 +498,22 @@
   });
 
   const observer = new MutationObserver(scheduleAutoRun);
-  observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["disabled", "class"] });
+  const observeDocument = () => {
+    if (!document.documentElement) {
+      document.addEventListener("DOMContentLoaded", observeDocument, { once: true });
+      return;
+    }
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class", "style", "hidden", "aria-hidden", "disabled"]
+    });
+  };
+  observeDocument();
+  document.addEventListener("DOMContentLoaded", scheduleAutoRun, { once: true });
+  window.addEventListener("load", scheduleAutoRun, { once: true });
+  document.addEventListener("click", handleUserClick, true);
+  patchHistoryNavigation();
   loadSettings();
 })();

@@ -104,6 +104,17 @@ input::placeholder { color: color-mix(in oklch, var(--muted) 76%, white); }
 input:focus, select:focus { border-color: color-mix(in oklch, var(--primary) 65%, var(--line)); }
 .site-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .origin-field { grid-column: 1 / -1; }
+.trigger-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin: 2px 0 10px; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-subtle); }
+.trigger-tab { min-height: 30px; border-radius: 7px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 750; }
+.trigger-tab:hover { color: var(--ink); }
+.trigger-tab.active { background: var(--surface); color: var(--primary-strong); box-shadow: 0 2px 5px rgb(20 10 30 / 8%); }
+.trigger-config { display: grid; gap: 8px; margin-bottom: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-subtle); }
+.trigger-config[hidden] { display: none; }
+.trigger-config .field-block { margin-bottom: 0; }
+.trigger-target-line { margin-bottom: 0; }
+.trigger-options { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px; }
+.trigger-cooldown-field { grid-column: 1 / -1; margin-top: 4px; }
+.trigger-hint { color: var(--muted); font-size: 10px; line-height: 1.45; }
 .editor-section-heading { align-items: flex-end; margin: 19px 0 9px; }
 .editor-section-heading > div { display: grid; gap: 3px; }
 .editor-section-heading p { color: var(--muted); font-size: 11px; line-height: 1.4; }

@@ -110,6 +110,30 @@
           </label>
         </div>
 
+        <div class="trigger-tabs" role="tablist" aria-label="规则触发方式">
+          <button id="triggerPageLoad" class="trigger-tab active" type="button" role="tab" aria-selected="true" data-trigger-mode="pageLoad">页面加载</button>
+          <button id="triggerCondition" class="trigger-tab" type="button" role="tab" aria-selected="false" data-trigger-mode="condition">条件触发</button>
+        </div>
+        <div id="triggerConfig" class="trigger-config" hidden>
+          <label class="field-block">
+            <span>触发方式</span>
+            <select id="triggerType">
+              <option value="elementVisible">元素出现 / 变为可见</option>
+              <option value="userClick">用户点击元素</option>
+            </select>
+          </label>
+          <div class="target-line trigger-target-line">
+            <span id="triggerTargetText" class="target-chip">未选择元素</span>
+            <button id="pickTrigger" class="text-button" type="button">选择元素</button>
+          </div>
+          <div class="trigger-options">
+            <label class="secret-line"><input id="triggerOnce" type="checkbox" checked /><span>每个页面只执行一次</span></label>
+            <label class="secret-line"><input id="triggerRepeat" type="checkbox" /><span>元素重新出现时再次执行</span></label>
+            <label class="field-block trigger-cooldown-field"><span>触发冷却（毫秒）</span><input id="triggerCooldown" type="number" min="0" max="30000" step="100" value="1500" /></label>
+          </div>
+          <p id="triggerHint" class="trigger-hint">页面保持打开时监听元素从不存在或不可见变为可见。重复 DOM 变化不会重复执行。</p>
+        </div>
+
         <div class="editor-section-heading">
           <div>
             <h3>流程步骤</h3>
