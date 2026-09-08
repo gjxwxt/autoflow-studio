@@ -38,6 +38,10 @@
           <span id="permissionState" class="permission-badge">检查权限</span>
         </div>
       </section>
+      <div id="runtimeStatus" class="runtime-status" hidden>
+        <span id="runtimeStatusText"></span>
+        <button id="viewRuntimeLogs" class="text-button" type="button">查看运行日志</button>
+      </div>
 
       <section id="profileOverview" class="profile-section" aria-labelledby="profilesHeading">
         <div class="section-heading">
@@ -193,6 +197,24 @@
         <div class="dialog-actions">
           <button id="cancelExport" class="secondary-button" type="button">取消</button>
           <button id="confirmExport" class="primary-button" type="button">导出文件</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="runtimeLogDialog" class="modal-dialog" aria-labelledby="runtimeLogDialogTitle">
+      <div class="dialog-card">
+        <div class="dialog-heading">
+          <div>
+            <span class="section-kicker">诊断</span>
+            <h2 id="runtimeLogDialogTitle">运行日志</h2>
+            <p class="dialog-subtitle">只显示当前扩展会话的脱敏事件，不包含填充值。</p>
+          </div>
+          <button id="closeRuntimeLogs" class="icon-button dialog-close" type="button" title="关闭" aria-label="关闭">×</button>
+        </div>
+        <div id="runtimeLogList" class="runtime-log-list"></div>
+        <div class="dialog-actions">
+          <button id="clearRuntimeLogs" class="secondary-button" type="button">清空</button>
+          <button id="copyRuntimeDiagnostics" class="primary-button" type="button">复制诊断信息</button>
         </div>
       </div>
     </dialog>

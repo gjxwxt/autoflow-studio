@@ -2,10 +2,25 @@
   if (window.__autoFillStudioLoaded) return;
   window.__autoFillStudioLoaded = true;
 
-  const { isSupportedProfile, matchesProfile, normalizeProfile, targetSummary } = AutoFillShared;
-  const DEFAULTS = { profiles: [], activeProfileId: "", globalEnabled: true };
+  const {
+    PROTOCOL_VERSION,
+    createId,
+    isSupportedProfile,
+    isValueBearingAction,
+    matchesProfile,
+    normalizeProfile,
+    sanitizeRuntimeEvent,
+    targetSummary
+  } = AutoFillShared;
   let profiles = [];
   let globalEnabled = true;
+  let runtimeSnapshot = null;
+  let snapshotRequest = null;
+  const sessionId = globalThis.crypto?.randomUUID?.() || createId("session");
+  let eventSeq = 0;
+  let pendingEvents = [];
+  let eventTimer = 0;
+  let deferPageLoadUntilNavigation = false;
   let pickerCleanup = null;
   let scanTimer = 0;
   let scanMaxTimer = 0;
@@ -18,6 +33,69 @@
   const runQueue = [];
   const ruleStates = new Map();
   const deferredPageLoadIds = new Set();
+
+  function emitRuntimeEvent(event, details = {}) {
+    const item = sanitizeRuntimeEvent({
+      timestamp: Date.now(),
+      seq: ++eventSeq,
+      event,
+      page: location.href,
+      documentId: runtimeSnapshot?.documentId || "",
+      sessionId,
+      revision: runtimeSnapshot?.revision || 0,
+      ...details
+    });
+    pendingEvents.push(item);
+    if (pendingEvents.length >= 20) flushRuntimeEvents();
+    else if (!eventTimer) eventTimer = window.setTimeout(flushRuntimeEvents, 100);
+  }
+
+  function flushRuntimeEvents() {
+    window.clearTimeout(eventTimer);
+    eventTimer = 0;
+    if (!pendingEvents.length) return;
+    const events = pendingEvents.splice(0, 100);
+    chrome.runtime.sendMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "log.batch",
+      payload: { events }
+    }).catch(() => undefined);
+  }
+
+  async function requestSnapshot({ deferPageLoad = false } = {}) {
+    if (snapshotRequest) return snapshotRequest;
+    snapshotRequest = chrome.runtime.sendMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "runtime.getSnapshot",
+      payload: { sessionId }
+    }).then((result) => {
+      if (!result?.ok) {
+        const error = new Error(result?.message || "无法读取当前页面规则");
+        error.code = result?.code || "SNAPSHOT_FAILED";
+        throw error;
+      }
+      runtimeSnapshot = result;
+      profiles = Array.isArray(result.profiles) ? result.profiles.map(normalizeProfile).filter(isSupportedProfile) : [];
+      globalEnabled = result.globalEnabled !== false;
+      deferPageLoadUntilNavigation = deferPageLoad;
+      resetRuntimeStates();
+      if (deferPageLoad && globalEnabled) {
+        for (const profile of matchingProfiles()) {
+          const triggerType = profile.trigger?.type || "pageLoad";
+          if (triggerType === "pageLoad") deferredPageLoadIds.add(profile.id);
+          if (triggerType === "elementVisible") {
+            ruleState(profile).wasSatisfied = Boolean(findTarget(profile.trigger?.target, { requireVisible: true }));
+          }
+        }
+      }
+      emitRuntimeEvent("runtime.session.snapshot", { context: { profileCount: profiles.length } });
+      scheduleAutoRun();
+      return result;
+    }).finally(() => {
+      snapshotRequest = null;
+    });
+    return snapshotRequest;
+  }
 
   function wait(ms, signal) {
     return new Promise((resolve, reject) => {
@@ -68,7 +146,7 @@
       || null;
   }
 
-  function findTarget(target = {}, { requireVisible = true } = {}) {
+  function findTargetCandidates(target = {}, { requireVisible = true } = {}) {
     const selectors = [];
     if (target.id) selectors.push(`#${cssEscape(target.id)}`);
     if (target.name) selectors.push(`${target.tag || "*"}[name="${String(target.name).replace(/"/g, '\\"')}"]`);
@@ -76,26 +154,46 @@
     if (target.ariaLabel) selectors.push(`[aria-label="${String(target.ariaLabel).replace(/"/g, '\\"')}"]`);
     if (target.css) selectors.push(target.css);
 
+    const candidates = new Set();
     for (const selector of selectors) {
       try {
-        const element = document.querySelector(selector);
-        if (element && (!requireVisible || isVisible(element))) return element;
+        for (const element of document.querySelectorAll(selector)) candidates.add(element);
       } catch {
         // An edited selector should not stop other selector strategies.
       }
     }
-    return findByText(target, requireVisible);
+    if (target.text) {
+      const expected = cleanText(target.text);
+      const textCandidates = document.querySelectorAll("button, [role=button], a, input[type=submit]");
+      for (const element of textCandidates) {
+        const text = cleanText(element.innerText || element.value);
+        if (text === expected || text.includes(expected)) candidates.add(element);
+      }
+    }
+    return [...candidates].filter((element) => !requireVisible || isVisible(element));
   }
 
-  async function waitForTarget(target, timeoutMs = 8000, signal) {
+  function resolveTarget(target = {}, options = {}) {
+    const candidates = findTargetCandidates(target, options);
+    if (!candidates.length) return { status: "notFound", candidates };
+    if (options.unique && candidates.length > 1) return { status: "ambiguous", candidates };
+    return { status: "resolved", element: candidates[0], candidates };
+  }
+
+  function findTarget(target = {}, { requireVisible = true } = {}) {
+    return resolveTarget(target, { requireVisible }).element || null;
+  }
+
+  async function waitForTarget(target, timeoutMs = 8000, signal, { unique = false } = {}) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (signal?.aborted) throw new DOMException("流程已取消", "AbortError");
-      const element = findTarget(target);
-      if (element) return element;
+      const resolution = resolveTarget(target, { unique });
+      if (resolution.status === "resolved") return unique ? resolution : resolution.element;
+      if (resolution.status === "ambiguous") return resolution;
       await wait(120, signal);
     }
-    return null;
+    return unique ? { status: "notFound", candidates: [] } : null;
   }
 
   function setValue(element, value, guard = () => undefined) {
@@ -152,22 +250,60 @@
     }
   });
 
-  async function executeStep(step, signal, guard = () => undefined) {
-    if (step.action === "delay") {
+  async function getStepValue(runContext, step, guard) {
+    if (!isValueBearingAction(step.action)) return step.value;
+    const result = await chrome.runtime.sendMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "runtime.getStepValue",
+      payload: {
+        runId: runContext.runId,
+        profileId: runContext.profileId,
+        stepId: step.id,
+        revision: runContext.revision
+      }
+    });
+    guard();
+    if (!result?.ok) {
+      const error = new Error(result?.message || "无法读取当前步骤值");
+      error.code = result?.code || "STEP_VALUE_FAILED";
+      throw error;
+    }
+    return result.value;
+  }
+
+  async function executeStep(step, signal, guard = () => undefined, runContext) {
+    const value = await getStepValue(runContext, step, guard);
+    const resolvedStep = value === step.value ? step : { ...step, value };
+    if (resolvedStep.action === "delay") {
       guard();
-      const delayMs = Number.isFinite(Number(step.value)) ? Math.max(0, Math.min(Number(step.value), 30000)) : 0;
+      const delayMs = Number.isFinite(Number(resolvedStep.value)) ? Math.max(0, Math.min(Number(resolvedStep.value), 30000)) : 0;
       await wait(delayMs, signal);
       guard();
       return { ok: true };
     }
 
-    const element = await waitForTarget(step.target, Math.max(1000, Math.min(Number(step.timeoutMs) || 12000, 30000)), signal);
+    const unique = ["fill", "click", "check", "select"].includes(resolvedStep.action);
+    const resolution = await waitForTarget(
+      resolvedStep.target,
+      Math.max(1000, Math.min(Number(resolvedStep.timeoutMs) || 12000, 30000)),
+      signal,
+      { unique }
+    );
     guard();
-    if (!element) return { ok: false, message: `找不到：${step.label || targetSummary(step.target)}` };
+    if (!resolution || resolution.status === "notFound") {
+      emitRuntimeEvent("locator.not_found", { level: "warn", code: "LOCATOR_NOT_FOUND", stepId: resolvedStep.id, runId: runContext?.runId });
+      return { ok: false, code: "LOCATOR_NOT_FOUND", message: `找不到：${resolvedStep.label || targetSummary(resolvedStep.target)}` };
+    }
+    if (resolution.status === "ambiguous") {
+      emitRuntimeEvent("locator.ambiguous", { level: "warn", code: "LOCATOR_AMBIGUOUS", stepId: resolvedStep.id, runId: runContext?.runId, context: { matches: resolution.candidates.length } });
+      return { ok: false, code: "LOCATOR_AMBIGUOUS", message: `目标不唯一：${resolvedStep.label || targetSummary(resolvedStep.target)}` };
+    }
+    const element = unique ? resolution.element : resolution;
+    emitRuntimeEvent("locator.resolved", { stepId: resolvedStep.id, runId: runContext?.runId, context: { matches: unique ? resolution.candidates.length : 1 } });
     const input = inputForLabel(element);
-    const handler = ACTION_HANDLERS[step.action];
-    if (!handler) return { ok: false, message: `不支持的动作：${step.action}` };
-    return handler({ element, input, step, signal, guard });
+    const handler = ACTION_HANDLERS[resolvedStep.action];
+    if (!handler) return { ok: false, code: "ACTION_UNSUPPORTED", message: `不支持的动作：${resolvedStep.action}` };
+    return handler({ element, input, step: resolvedStep, signal, guard });
   }
 
   function matchingProfiles() {
@@ -195,45 +331,39 @@
       controller: null,
       cooldownTimer: 0,
       runToken: 0,
+      runId: "",
+      revision: 0,
+      documentId: "",
       lastMessage: ""
     };
     ruleStates.set(profile.id, next);
     return next;
   }
 
-  function resetRuntimeStates() {
+  function resetRuntimeStates({ clearDeferred = true } = {}) {
     runtimeGeneration += 1;
     for (const state of ruleStates.values()) {
       state.controller?.abort();
       if (state.cooldownTimer) window.clearTimeout(state.cooldownTimer);
     }
     ruleStates.clear();
-    for (const item of runQueue) item.resolve?.({ ok: false, cancelled: true, message: "流程已取消" });
+    for (const item of runQueue) {
+      releaseRun(item.runId);
+      item.resolve?.({ ok: false, cancelled: true, message: "流程已取消" });
+    }
     runQueue.length = 0;
-    deferredPageLoadIds.clear();
+    if (clearDeferred) deferredPageLoadIds.clear();
     window.clearTimeout(scanTimer);
     window.clearTimeout(scanMaxTimer);
     scanTimer = 0;
     scanMaxTimer = 0;
     scanDirty = false;
-  }
-
-  function primeAfterSettingsChange() {
-    resetRuntimeStates();
-    if (!globalEnabled) return;
-    for (const profile of matchingProfiles()) {
-      const state = ruleState(profile);
-      const triggerType = profile.trigger?.type || "pageLoad";
-      if (triggerType === "pageLoad") deferredPageLoadIds.add(profile.id);
-      if (triggerType === "elementVisible") {
-        state.wasSatisfied = Boolean(findTarget(profile.trigger?.target, { requireVisible: true }));
-      }
-    }
+    emitRuntimeEvent("runtime.state.reset");
   }
 
   function canQueue(profile, state, manual = false) {
     const options = profile.trigger?.options || {};
-    if (["queued", "running"].includes(state.phase)) return false;
+    if (["authorizing", "queued", "running"].includes(state.phase)) return false;
     if (manual) return true;
     if (["cooldown", "failed"].includes(state.phase)) return false;
     if (Date.now() < state.cooldownUntil) return false;
@@ -242,10 +372,39 @@
     return true;
   }
 
-  function queueProfile(profile, reason = "condition", { manual = false, resetCount = false, waitForResult = false } = {}) {
+  async function authorizeRun(profile, reason, manual) {
+    if (!runtimeSnapshot) await requestSnapshot();
+    const result = await chrome.runtime.sendMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "runtime.startRun",
+      payload: {
+        profileId: profile.id,
+        expectedRevision: runtimeSnapshot?.revision || 0,
+        sessionId,
+        reason: manual ? "manual" : reason
+      }
+    });
+    if (!result?.ok) {
+      const error = new Error(result?.message || "运行授权失败");
+      error.code = result?.code || "RUN_AUTHORIZATION_FAILED";
+      throw error;
+    }
+    return result;
+  }
+
+  async function releaseRun(runId) {
+    if (!runId) return;
+    chrome.runtime.sendMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: "runtime.finishRun",
+      payload: { runId }
+    }).catch(() => undefined);
+  }
+
+  async function queueProfile(profile, reason = "condition", { manual = false, resetCount = false, waitForResult = false } = {}) {
     if (!globalEnabled || !profile || (!manual && !profile.enabled) || !matchesProfile(profile, location.href)) return false;
     const state = ruleState(profile);
-    if (["queued", "running"].includes(state.phase)) return false;
+    if (["authorizing", "queued", "running"].includes(state.phase)) return false;
     if (resetCount) {
       if (state.cooldownTimer) window.clearTimeout(state.cooldownTimer);
       state.cooldownTimer = 0;
@@ -254,13 +413,44 @@
       state.phase = "armed";
     }
     if (!canQueue(profile, state, manual)) return false;
+    state.phase = "authorizing";
+    state.queued = false;
+    let authorization;
+    try {
+      authorization = await authorizeRun(profile, reason, manual);
+    } catch (error) {
+      state.phase = "armed";
+      state.lastMessage = error.message || "运行授权失败";
+      emitRuntimeEvent("scheduler.skipped", {
+        level: "warn",
+        code: error.code || "RUN_AUTHORIZATION_FAILED",
+        profileId: profile.id,
+        context: { reason }
+      });
+      return false;
+    }
+    if (runtimeGeneration !== state.generation || ruleStates.get(profile.id) !== state) {
+      await releaseRun(authorization.runId);
+      state.phase = "cancelled";
+      return false;
+    }
     state.phase = "queued";
     state.queued = true;
-    const item = { profile, state, reason, manual, generation: runtimeGeneration };
+    const item = {
+      profile,
+      state,
+      reason,
+      manual,
+      generation: runtimeGeneration,
+      runId: authorization.runId,
+      revision: authorization.revision,
+      documentId: authorization.documentId
+    };
     const completion = waitForResult
       ? new Promise((resolve) => { item.resolve = resolve; })
       : null;
     runQueue.push(item);
+    emitRuntimeEvent("scheduler.queued", { profileId: profile.id, runId: item.runId, context: { reason } });
     drainQueue().catch(() => undefined);
     return completion ? { queued: true, promise: completion } : true;
   }
@@ -269,18 +459,26 @@
     return runtimeGeneration === generation
       && ruleStates.get(profile.id) === state
       && state.runToken === runToken
+      && state.runId
+      && runtimeSnapshot?.revision === state.revision
+      && runtimeSnapshot?.documentId === state.documentId
       && location.href === pageHref
       && matchesProfile(profile, location.href);
   }
 
-  async function executeProfile(profile, state, reason = "condition", generation = runtimeGeneration) {
+  async function executeProfile(profile, state, reason = "condition", generation = runtimeGeneration, runContext) {
     const controller = new AbortController();
     const runToken = ++nextRunToken;
     const pageHref = location.href;
     state.controller = controller;
     state.runToken = runToken;
+    state.runId = runContext.runId;
+    state.revision = runContext.revision;
+    state.documentId = runContext.documentId;
     state.phase = "running";
     state.queued = false;
+    const startedAt = Date.now();
+    emitRuntimeEvent("run.started", { profileId: profile.id, runId: runContext.runId, context: { reason } });
     try {
       for (const step of profile.steps.filter((item) => item.enabled !== false)) {
         const guard = () => {
@@ -289,13 +487,30 @@
           }
         };
         guard();
-        const result = await executeStep(step, controller.signal, guard);
+        const stepStartedAt = Date.now();
+        emitRuntimeEvent("step.started", { profileId: profile.id, stepId: step.id, runId: runContext.runId, context: { action: step.action } });
+        const result = await executeStep(step, controller.signal, guard, runContext);
         if (!isCurrentRun(profile, state, runToken, generation, pageHref)) throw new DOMException("流程已取消", "AbortError");
         if (!result.ok) {
           state.phase = "failed";
           state.lastMessage = result.message || "流程执行失败";
+          emitRuntimeEvent("step.failed", {
+            level: "warn",
+            code: result.code || "ACTION_FAILED",
+            profileId: profile.id,
+            stepId: step.id,
+            runId: runContext.runId,
+            durationMs: Date.now() - stepStartedAt
+          });
           return result;
         }
+        emitRuntimeEvent("step.succeeded", {
+          profileId: profile.id,
+          stepId: step.id,
+          runId: runContext.runId,
+          durationMs: Date.now() - stepStartedAt,
+          context: { action: step.action }
+        });
       }
       state.runCount += 1;
       state.lastMessage = "流程已执行完成";
@@ -315,17 +530,21 @@
           scheduleAutoRun();
         }, Math.max(0, Number(options.cooldownMs) || 0));
       }
+      emitRuntimeEvent("run.succeeded", { profileId: profile.id, runId: runContext.runId, durationMs: Date.now() - startedAt });
       return { ok: true, message: "流程已执行完成", reason };
     } catch (error) {
       if (error?.name === "AbortError") {
         state.phase = "cancelled";
         state.lastMessage = "流程已取消";
+        emitRuntimeEvent("run.cancelled", { level: "warn", code: "RUN_CANCELLED", profileId: profile.id, runId: runContext.runId, durationMs: Date.now() - startedAt });
         return { ok: false, cancelled: true, message: "流程已取消", reason };
       }
       state.phase = "failed";
       state.lastMessage = error?.message || "流程执行失败";
-      return { ok: false, message: state.lastMessage };
+      emitRuntimeEvent("run.failed", { level: "error", code: error?.code || "ACTION_FAILED", profileId: profile.id, runId: runContext.runId, durationMs: Date.now() - startedAt });
+      return { ok: false, code: error?.code || "ACTION_FAILED", message: state.lastMessage };
     } finally {
+      await releaseRun(runContext.runId);
       state.controller = null;
       if (state.phase === "running") state.phase = "failed";
       scheduleAutoRun();
@@ -339,20 +558,27 @@
       while (runQueue.length) {
         const item = runQueue.shift();
         if (!item) continue;
-        const { profile, state, manual, generation } = item;
+        const { profile, state, manual, generation, runId, revision, documentId } = item;
         if (generation !== runtimeGeneration || ruleStates.get(profile.id) !== state) {
           state.phase = "cancelled";
           state.queued = false;
+          await releaseRun(runId);
           item.resolve?.({ ok: false, cancelled: true, message: "流程已取消" });
           continue;
         }
         if (!globalEnabled || (!manual && !profile.enabled) || !matchesProfile(profile, location.href)) {
           state.phase = "armed";
           state.queued = false;
+          await releaseRun(runId);
           item.resolve?.({ ok: false, skipped: true, message: "规则未启用或不匹配当前页面" });
           continue;
         }
-        const result = await executeProfile(profile, state, item.reason, generation);
+        const result = await executeProfile(profile, state, item.reason, generation, {
+          runId,
+          revision,
+          documentId,
+          profileId: profile.id
+        });
         item.resolve?.(result);
       }
     } finally {
@@ -366,8 +592,9 @@
     state.wasSatisfied = satisfied;
     const options = profile.trigger?.options || {};
     if (becameSatisfied && (state.runCount === 0 || options.retriggerWhenReappears)) {
-      const queued = queueProfile(profile, "elementVisible");
-      if (!queued && state.phase === "cooldown") state.pendingActivation = true;
+      queueProfile(profile, "elementVisible").then((queued) => {
+        if (!queued && state.phase === "cooldown") state.pendingActivation = true;
+      }).catch(() => undefined);
     }
   }
 
@@ -375,7 +602,7 @@
     pageLoad: {
       onScan: ({ profile, state }) => {
         if (deferredPageLoadIds.has(profile.id)) return;
-        if (state.runCount === 0) queueProfile(profile, "pageLoad");
+        if (state.runCount === 0) queueProfile(profile, "pageLoad").catch(() => undefined);
       }
     },
     elementVisible: {
@@ -389,7 +616,13 @@
   function evaluateRules() {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
+      deferPageLoadUntilNavigation = false;
       resetRuntimeStates();
+      runtimeSnapshot = null;
+      profiles = [];
+      globalEnabled = false;
+      requestSnapshot().catch((error) => emitRuntimeEvent("runtime.navigation.failed", { level: "error", code: error.code || "SNAPSHOT_FAILED" }));
+      return;
     }
     if (!globalEnabled) return;
     for (const profile of matchingProfiles()) {
@@ -441,14 +674,19 @@
     if (!globalEnabled || !event.isTrusted || pickerCleanup) return;
     for (const profile of matchingProfiles()) {
       const handler = TRIGGER_HANDLERS[profile.trigger?.type];
-      if (handler?.matchesEvent?.({ event, profile })) queueProfile(profile, "userClick");
+      if (handler?.matchesEvent?.({ event, profile })) queueProfile(profile, "userClick").catch(() => undefined);
     }
   }
 
   function resetForNavigation() {
     if (location.href === lastUrl) return;
     lastUrl = location.href;
+    deferPageLoadUntilNavigation = false;
     resetRuntimeStates();
+    runtimeSnapshot = null;
+    profiles = [];
+    globalEnabled = false;
+    requestSnapshot().catch((error) => emitRuntimeEvent("runtime.navigation.failed", { level: "error", code: error.code || "SNAPSHOT_FAILED" }));
     scheduleAutoRun();
   }
 
@@ -469,7 +707,9 @@
     navigationTimer = window.setInterval(resetForNavigation, 500);
   }
 
-  async function applyProfile(profile, force = false) {
+  async function applyProfile(profileId, force = false) {
+    const profile = profiles.find((item) => item.id === profileId);
+    if (!profile) return { ok: false, message: "当前页面没有找到这条规则", code: "URL_MISMATCH" };
     const normalized = normalizeProfile(profile);
     if (!isSupportedProfile(normalized)) return { ok: false, message: "规则包含当前版本不支持的动作或数据版本" };
     if (!force && (!normalized.enabled || !globalEnabled || !matchesProfile(normalized, location.href))) {
@@ -477,12 +717,12 @@
     }
     const state = ruleState(normalized);
     if (!force) {
-      queueProfile(normalized, "automatic");
+      queueProfile(normalized, "automatic").catch(() => undefined);
       return { ok: true, queued: true, message: "规则已加入执行队列" };
     }
     if (!globalEnabled) return { ok: false, message: "总开关已关闭，无法测试规则" };
     if (!matchesProfile(normalized, location.href)) return { ok: false, message: "规则与当前页面不匹配，无法测试" };
-    const queued = queueProfile(normalized, "manual", { manual: true, resetCount: true, waitForResult: true });
+    const queued = await queueProfile(normalized, "manual", { manual: true, resetCount: true, waitForResult: true });
     if (!queued) {
       return { ok: false, message: state.phase === "running" ? "规则正在执行" : "规则暂时无法加入执行队列" };
     }
@@ -591,30 +831,28 @@
   }
 
   async function loadSettings() {
-    const stored = await chrome.storage.local.get(DEFAULTS);
-    profiles = Array.isArray(stored.profiles) ? stored.profiles.map(normalizeProfile).filter(isSupportedProfile) : [];
-    globalEnabled = stored.globalEnabled !== false;
-    resetRuntimeStates();
-    scheduleAutoRun();
+    try {
+      await requestSnapshot();
+      emitRuntimeEvent("runtime.session.started");
+    } catch (error) {
+      profiles = [];
+      globalEnabled = false;
+      emitRuntimeEvent("runtime.session.failed", { level: "error", code: error.code || "SNAPSHOT_FAILED" });
+    }
   }
 
-  chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName !== "local") return;
-    let settingsChanged = false;
-    if (changes.profiles) {
-      profiles = Array.isArray(changes.profiles.newValue) ? changes.profiles.newValue.map(normalizeProfile).filter(isSupportedProfile) : [];
-      settingsChanged = true;
+  async function handleSnapshotUpdated(revision) {
+    emitRuntimeEvent("runtime.settings.changed", { context: { revision } });
+    resetRuntimeStates();
+    runtimeSnapshot = null;
+    profiles = [];
+    globalEnabled = false;
+    try {
+      await requestSnapshot({ deferPageLoad: true });
+    } catch (error) {
+      emitRuntimeEvent("runtime.snapshot.failed", { level: "error", code: error.code || "SNAPSHOT_FAILED" });
     }
-    if (changes.globalEnabled) {
-      globalEnabled = changes.globalEnabled.newValue !== false;
-      settingsChanged = true;
-    }
-    if (settingsChanged) {
-      if (globalEnabled) primeAfterSettingsChange();
-      else resetRuntimeStates();
-      scheduleAutoRun();
-    }
-  });
+  }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === "startPicker") {
@@ -631,8 +869,25 @@
       sendResponse({ ok: true, url: location.href, title: document.title });
       return false;
     }
-    if (message?.type === "applyProfile") {
-      applyProfile(message.profile, true).then(sendResponse).catch((error) => sendResponse({ ok: false, message: error.message }));
+    if (message?.type === "runtime.requestManualRun") {
+      const expectedRevision = Number(message.payload?.expectedRevision);
+      const prepare = !runtimeSnapshot || (Number.isFinite(expectedRevision) && runtimeSnapshot.revision !== expectedRevision)
+        ? requestSnapshot({ deferPageLoad: true })
+        : Promise.resolve();
+      prepare.then(() => {
+        if (Number.isFinite(expectedRevision) && runtimeSnapshot?.revision !== expectedRevision) {
+          const error = new Error("页面规则版本已变化，请重新打开面板后重试");
+          error.code = "REVISION_STALE";
+          throw error;
+        }
+        return applyProfile(message.payload?.profileId, true);
+      })
+        .then(sendResponse)
+        .catch((error) => sendResponse({ ok: false, code: error.code || "MANUAL_RUN_FAILED", message: error.message }));
+      return true;
+    }
+    if (message?.type === "runtime.snapshotUpdated") {
+      handleSnapshotUpdated(message.payload?.revision).catch(() => undefined);
       return true;
     }
     return false;
@@ -656,7 +911,7 @@
   window.addEventListener("load", scheduleAutoRun, { once: true });
   window.addEventListener("pageshow", () => {
     lastUrl = location.href;
-    resetRuntimeStates();
+    resetRuntimeStates({ clearDeferred: !deferPageLoadUntilNavigation });
     scheduleAutoRun();
   }, true);
   document.addEventListener("visibilitychange", () => {

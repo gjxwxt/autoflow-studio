@@ -1,8 +1,27 @@
 (() => {
   const deepClone = (value) => JSON.parse(JSON.stringify(value));
   const CURRENT_SCHEMA_VERSION = 3;
+  const PROTOCOL_VERSION = 1;
   const UNSUPPORTED_ACTION = "__unsupported__";
   const SUPPORTED_ACTIONS = Object.freeze(["fill", "check", "click", "select", "wait", "delay"]);
+  const VALUE_BEARING_ACTIONS = Object.freeze(["fill", "select"]);
+  const RUNTIME_EVENT_LEVELS = Object.freeze(["debug", "info", "warn", "error"]);
+  const RUNTIME_EVENT_CODES = Object.freeze([
+    "LOCATOR_NOT_FOUND",
+    "LOCATOR_AMBIGUOUS",
+    "ACTION_UNSUPPORTED",
+    "ACTION_FAILED",
+    "RUN_CANCELLED",
+    "RUN_STALE",
+    "RUN_TIMEOUT",
+    "PROFILE_DISABLED",
+    "GLOBAL_DISABLED",
+    "URL_MISMATCH",
+    "REVISION_STALE",
+    "PERMISSION_DENIED",
+    "UNSUPPORTED_FRAME",
+    "PROTOCOL_INVALID"
+  ]);
   const TARGET_KEYS = Object.freeze(["tag", "id", "name", "placeholder", "ariaLabel", "role", "type", "text", "css"]);
 
   const DEFAULT_ATRUST_PROFILE = {
@@ -89,6 +108,63 @@
     const number = Number(value);
     if (!Number.isFinite(number)) return fallback;
     return Math.max(minimum, Math.min(number, maximum));
+  }
+
+  function isValueBearingAction(action) {
+    return VALUE_BEARING_ACTIONS.includes(action);
+  }
+
+  function runtimeProfile(profile) {
+    const source = normalizeProfile(profile);
+    return {
+      ...source,
+      steps: source.steps.map((step) => isValueBearingAction(step.action)
+        ? { ...step, value: "", valueRequired: true }
+        : { ...step })
+    };
+  }
+
+  function pageUrlForDiagnostics(value) {
+    try {
+      const url = new URL(value);
+      return `${url.origin}${url.pathname}`;
+    } catch {
+      return "";
+    }
+  }
+
+  function sanitizeRuntimeContext(context) {
+    if (!context || typeof context !== "object" || Array.isArray(context)) return {};
+    const result = {};
+    for (const [key, value] of Object.entries(context)) {
+      if (/value|password|secret|token|cookie|authorization|clipboard|payload/i.test(key)) continue;
+      if (typeof value === "string") result[key] = value.slice(0, 240);
+      else if (typeof value === "number" && Number.isFinite(value)) result[key] = value;
+      else if (typeof value === "boolean") result[key] = value;
+    }
+    return result;
+  }
+
+  function sanitizeRuntimeEvent(event) {
+    const source = event && typeof event === "object" ? event : {};
+    const sanitized = {
+      timestamp: Number.isFinite(Number(source.timestamp)) ? Number(source.timestamp) : Date.now(),
+      seq: Number.isFinite(Number(source.seq)) ? Number(source.seq) : 0,
+      level: RUNTIME_EVENT_LEVELS.includes(source.level) ? source.level : "info",
+      event: String(source.event || "runtime.event").slice(0, 80),
+      code: RUNTIME_EVENT_CODES.includes(source.code) ? source.code : "",
+      documentId: String(source.documentId || "").slice(0, 160),
+      sessionId: String(source.sessionId || "").slice(0, 160),
+      runId: String(source.runId || "").slice(0, 160),
+      profileId: String(source.profileId || "").slice(0, 160),
+      stepId: String(source.stepId || "").slice(0, 160),
+      revision: Number.isFinite(Number(source.revision)) ? Number(source.revision) : 0,
+      durationMs: Number.isFinite(Number(source.durationMs)) ? Math.max(0, Number(source.durationMs)) : undefined,
+      page: pageUrlForDiagnostics(source.page || ""),
+      context: sanitizeRuntimeContext(source.context)
+    };
+    if (sanitized.durationMs === undefined) delete sanitized.durationMs;
+    return sanitized;
   }
 
   function normalizeProfile(profile) {
@@ -247,17 +323,25 @@
 
   globalThis.AutoFillShared = {
     DEFAULT_ATRUST_PROFILE,
+    PROTOCOL_VERSION,
+    RUNTIME_EVENT_CODES,
+    RUNTIME_EVENT_LEVELS,
+    VALUE_BEARING_ACTIONS,
     copyProfile,
     createId,
     deepClone,
     exportProfileData,
     isSupportedProfile,
+    isValueBearingAction,
     isValueBearingTarget,
     matchesProfile,
     boundedNumber,
     normalizeOrigin,
     normalizeProfile,
     normalizeTarget,
+    pageUrlForDiagnostics,
+    runtimeProfile,
+    sanitizeRuntimeEvent,
     SUPPORTED_ACTIONS,
     UNSUPPORTED_ACTION,
     siteFromUrl,

@@ -99,3 +99,48 @@ test("target normalization strips unrecognized fields", () => {
   assert.equal(normalized.steps[0].target.value, undefined);
   assert.equal(normalized.steps[0].target.secretToken, undefined);
 });
+
+test("runtime snapshots strip value-bearing fields before reaching content scripts", () => {
+  const snapshot = shared.runtimeProfile(baseProfile({
+    steps: [
+      baseProfile().steps[0],
+      { id: "step-2", label: "下拉框", action: "select", value: "private-option", target: { tag: "select", id: "team" } },
+      { id: "step-3", label: "勾选", action: "check", value: true, target: { tag: "input", type: "checkbox", id: "agree" } }
+    ]
+  }));
+
+  assert.equal(snapshot.steps[0].value, "");
+  assert.equal(snapshot.steps[0].valueRequired, true);
+  assert.equal(snapshot.steps[1].value, "");
+  assert.equal(snapshot.steps[1].valueRequired, true);
+  assert.equal(snapshot.steps[2].value, true);
+});
+
+test("runtime diagnostics are redacted and URL query/hash is removed", () => {
+  const event = shared.sanitizeRuntimeEvent({
+    timestamp: 123,
+    event: "step.failed",
+    page: "https://example.com/login?sid=private#hash",
+    context: {
+      action: "fill",
+      value: "private-value",
+      password: "private-password",
+      selector: "#password",
+      attempts: 2
+    }
+  });
+
+  assert.equal(event.page, "https://example.com/login");
+  assert.equal(event.context.action, "fill");
+  assert.equal(event.context.selector, "#password");
+  assert.equal(event.context.attempts, 2);
+  assert.equal("value" in event.context, false);
+  assert.equal("password" in event.context, false);
+});
+
+test("value-bearing action classification is explicit", () => {
+  assert.equal(shared.isValueBearingAction("fill"), true);
+  assert.equal(shared.isValueBearingAction("select"), true);
+  assert.equal(shared.isValueBearingAction("click"), false);
+  assert.equal(shared.isValueBearingAction("check"), false);
+});

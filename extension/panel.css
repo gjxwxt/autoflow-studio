@@ -165,6 +165,16 @@ input:focus, select:focus { border-color: color-mix(in oklch, var(--primary) 65%
 .overview-action { width: 100%; min-height: 42px; border-radius: 10px; font-size: 13px; }
 .status.error { color: var(--danger); }
 
+.runtime-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; margin: 8px 2px 0; padding: 7px 9px; border: 1px solid color-mix(in oklch, var(--success) 25%, var(--line)); border-radius: 8px; background: color-mix(in oklch, var(--success) 6%, white); color: var(--success); font-size: 10px; line-height: 1.35; }
+.runtime-status-error { border-color: color-mix(in oklch, var(--danger) 28%, var(--line)); background: color-mix(in oklch, var(--danger) 6%, white); color: var(--danger); }
+.runtime-status > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runtime-log-list { display: grid; max-height: 300px; gap: 5px; overflow-y: auto; margin-top: 14px; padding: 2px; scrollbar-gutter: stable; }
+.runtime-log-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; min-width: 0; gap: 7px; padding: 7px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); font-size: 10px; }
+.runtime-log-row.error { border-color: color-mix(in oklch, var(--danger) 32%, var(--line)); background: color-mix(in oklch, var(--danger) 5%, white); }
+.runtime-log-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.runtime-log-event { min-width: 0; overflow: hidden; color: var(--ink); font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.runtime-log-code { max-width: 145px; overflow: hidden; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
+
 .switch { position: relative; display: inline-block; width: 42px; height: 24px; flex: 0 0 auto; }
 .switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .slider { position: absolute; inset: 0; border-radius: 999px; background: color-mix(in oklch, var(--muted) 28%, white); transition: background .18s ease; cursor: pointer; }

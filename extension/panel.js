@@ -1,12 +1,14 @@
 (() => {
   const {
     DEFAULT_ATRUST_PROFILE,
+    PROTOCOL_VERSION,
     copyProfile,
     createId,
     exportProfileData,
     isSupportedProfile,
     normalizeOrigin,
     normalizeProfile,
+    pageUrlForDiagnostics,
     siteFromUrl,
     targetSummary
   } = AutoFillShared;
@@ -37,7 +39,8 @@
     tabRefreshTimer: null,
     permissionGranted: null,
     statusMessage: "",
-    statusError: false
+    statusError: false,
+    runtimeEvents: []
   };
   const $ = (selector) => document.querySelector(selector);
   const profileOverview = $("#profileOverview");
@@ -47,6 +50,23 @@
   const emptySteps = $("#emptySteps");
   const status = $("#status");
   const overviewStatus = $("#overviewStatus");
+
+  const RUNTIME_EVENT_LABELS = Object.freeze({
+    "runtime.session.started": "页面运行时已建立",
+    "runtime.settings.changed": "规则配置已更新",
+    "scheduler.queued": "规则已进入执行队列",
+    "scheduler.skipped": "规则未执行",
+    "run.started": "流程开始执行",
+    "run.succeeded": "流程执行成功",
+    "run.failed": "流程执行失败",
+    "run.cancelled": "流程已取消",
+    "step.started": "步骤开始",
+    "step.succeeded": "步骤成功",
+    "step.failed": "步骤失败",
+    "locator.resolved": "元素已定位",
+    "locator.not_found": "找不到元素",
+    "locator.ambiguous": "元素匹配不唯一"
+  });
 
   function setStatus(message, isError = false) {
     state.statusMessage = message;
@@ -61,6 +81,71 @@
       element.textContent = visible ? state.statusMessage : "";
       element.classList.toggle("error", visible && state.statusError);
     }
+  }
+
+  function currentDiagnosticPage() {
+    return pageUrlForDiagnostics(state.currentTab?.url || "");
+  }
+
+  function relevantRuntimeEvents() {
+    const page = currentDiagnosticPage();
+    return state.runtimeEvents.filter((event) => !page || event.page === page);
+  }
+
+  function renderRuntimeStatus() {
+    const container = $("#runtimeStatus");
+    const text = $("#runtimeStatusText");
+    if (!container || !text) return;
+    const events = relevantRuntimeEvents();
+    const latest = [...events].reverse().find((event) => ["run.succeeded", "run.failed", "run.cancelled", "scheduler.queued", "scheduler.skipped"].includes(event.event));
+    container.hidden = !latest;
+    if (!latest) return;
+    text.textContent = `${RUNTIME_EVENT_LABELS[latest.event] || latest.event}${latest.code ? ` · ${latest.code}` : ""}`;
+    container.classList.toggle("runtime-status-error", latest.level === "error" || latest.event === "run.failed");
+  }
+
+  async function loadRuntimeLogs() {
+    try {
+      const result = await chrome.runtime.sendMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "log.query",
+        payload: { limit: 100 }
+      });
+      state.runtimeEvents = Array.isArray(result?.events) ? result.events : [];
+      renderRuntimeStatus();
+      return state.runtimeEvents;
+    } catch {
+      state.runtimeEvents = [];
+      renderRuntimeStatus();
+      return [];
+    }
+  }
+
+  function renderRuntimeLogs() {
+    const list = $("#runtimeLogList");
+    if (!list) return;
+    const events = relevantRuntimeEvents().slice(-80).reverse();
+    list.replaceChildren();
+    if (!events.length) {
+      list.append(makeElement("div", "empty-state", "当前页面还没有运行日志。"));
+      return;
+    }
+    for (const event of events) {
+      const row = makeElement("div", `runtime-log-row ${event.level === "error" || event.event === "run.failed" ? "error" : ""}`);
+      const time = new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      row.append(
+        makeElement("span", "runtime-log-time", time),
+        makeElement("span", "runtime-log-event", RUNTIME_EVENT_LABELS[event.event] || event.event),
+        makeElement("span", "runtime-log-code", event.code || event.context?.action || "")
+      );
+      list.append(row);
+    }
+  }
+
+  async function openRuntimeLogs() {
+    await loadRuntimeLogs();
+    renderRuntimeLogs();
+    $("#runtimeLogDialog")?.showModal();
   }
 
   function markEditorDirty() {
@@ -536,6 +621,7 @@
     $("#currentTitle").textContent = tab?.title || "未读取页面";
     $("#currentUrl").textContent = tab?.url || "当前页面不可访问";
     await updatePermissionState(tab?.url || "");
+    await loadRuntimeLogs();
     return tab;
   }
 
@@ -869,6 +955,7 @@
     renderEditor();
     updateQuickCreateButton();
     renderStatus();
+    renderRuntimeStatus();
   }
 
   async function ensurePermission(profile) {
@@ -936,7 +1023,10 @@
       setStatus("已保存，正在测试当前页面…", false);
       try {
         await getCurrentTab();
-        const result = await sendToCurrentTab({ type: "applyProfile", profile: saved });
+        const result = await sendToCurrentTab({
+          type: "runtime.requestManualRun",
+          payload: { profileId: saved.id, expectedRevision: state.revision }
+        });
         if (!result?.ok) {
           setStatus(result?.message || "测试未完成", true);
           return;
@@ -1045,6 +1135,37 @@
       await executeExport();
     } catch (error) {
       setStatus(error.message || "导出失败", true);
+    }
+  });
+  $("#viewRuntimeLogs").addEventListener("click", openRuntimeLogs);
+  $("#closeRuntimeLogs").addEventListener("click", () => $("#runtimeLogDialog").close());
+  $("#clearRuntimeLogs").addEventListener("click", async () => {
+    try {
+      const result = await chrome.runtime.sendMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: "log.clear",
+        payload: {}
+      });
+      if (!result?.ok) throw new Error(result?.message || "清空日志失败");
+      state.runtimeEvents = [];
+      renderRuntimeLogs();
+      renderRuntimeStatus();
+    } catch (error) {
+      setStatus(error.message || "清空日志失败", true);
+    }
+  });
+  $("#copyRuntimeDiagnostics").addEventListener("click", async () => {
+    const payload = {
+      format: "autoflow-runtime-diagnostics",
+      formatVersion: 1,
+      page: currentDiagnosticPage(),
+      events: relevantRuntimeEvents().slice(-100)
+    };
+    try {
+      if (!await copyText(JSON.stringify(payload, null, 2))) throw new Error("无法写入剪贴板");
+      setStatus("脱敏诊断信息已复制。", false);
+    } catch (error) {
+      setStatus(error.message || "复制诊断信息失败", true);
     }
   });
   $("#closeImport").addEventListener("click", () => $("#importDialog").close());
