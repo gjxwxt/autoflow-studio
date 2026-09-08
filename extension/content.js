@@ -58,6 +58,7 @@
     chrome.runtime.sendMessage({
       protocolVersion: PROTOCOL_VERSION,
       type: "log.batch",
+      requestId: createId("request"),
       payload: { events }
     }).catch(() => undefined);
   }
@@ -67,6 +68,7 @@
     snapshotRequest = chrome.runtime.sendMessage({
       protocolVersion: PROTOCOL_VERSION,
       type: "runtime.getSnapshot",
+      requestId: createId("request"),
       payload: { sessionId }
     }).then((result) => {
       if (!result?.ok) {
@@ -136,48 +138,51 @@
     return window.CSS?.escape ? window.CSS.escape(value) : String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
   }
 
-  function findByText(target, requireVisible = true) {
-    if (!target.text) return null;
-    const expected = cleanText(target.text);
-    const candidates = document.querySelectorAll("button, [role=button], a, input[type=submit]");
-    const usable = [...candidates].filter((element) => !requireVisible || isVisible(element));
-    return usable.find((element) => cleanText(element.innerText || element.value) === expected)
-      || usable.find((element) => cleanText(element.innerText || element.value).includes(expected))
-      || null;
+  function targetMatchesShape(element, target) {
+    if (target.tag && element.tagName.toLowerCase() !== String(target.tag).toLowerCase()) return false;
+    if (target.type && element.getAttribute("type") !== String(target.type)) return false;
+    if (target.role && element.getAttribute("role") !== String(target.role)) return false;
+    return true;
   }
 
-  function findTargetCandidates(target = {}, { requireVisible = true } = {}) {
-    const selectors = [];
-    if (target.id) selectors.push(`#${cssEscape(target.id)}`);
-    if (target.name) selectors.push(`${target.tag || "*"}[name="${String(target.name).replace(/"/g, '\\"')}"]`);
-    if (target.placeholder) selectors.push(`${target.tag || "input"}[placeholder="${String(target.placeholder).replace(/"/g, '\\"')}"]`);
-    if (target.ariaLabel) selectors.push(`[aria-label="${String(target.ariaLabel).replace(/"/g, '\\"')}"]`);
-    if (target.css) selectors.push(target.css);
-
-    const candidates = new Set();
-    for (const selector of selectors) {
-      try {
-        for (const element of document.querySelectorAll(selector)) candidates.add(element);
-      } catch {
-        // An edited selector should not stop other selector strategies.
+  function findTargetCandidates(target = {}, strategy, { requireVisible = true } = {}) {
+    let candidates = [];
+    try {
+      if (strategy === "id" && target.id) {
+        candidates = [...document.querySelectorAll(`#${cssEscape(target.id)}`)];
+      } else if (strategy === "css" && target.css) {
+        candidates = [...document.querySelectorAll(target.css)];
+      } else if (strategy === "name" && target.name) {
+        candidates = [...document.querySelectorAll(`${target.tag || "*"}[name="${String(target.name).replace(/"/g, '\\"')}"]`)];
+      } else if (strategy === "ariaLabel" && target.ariaLabel) {
+        candidates = [...document.querySelectorAll(`[aria-label="${String(target.ariaLabel).replace(/"/g, '\\"')}"]`)];
+      } else if (strategy === "placeholder" && target.placeholder) {
+        candidates = [...document.querySelectorAll(`${target.tag || "input"}[placeholder="${String(target.placeholder).replace(/"/g, '\\"')}"]`)];
+      } else if (strategy === "text" && target.text) {
+        const expected = cleanText(target.text);
+        candidates = [...document.querySelectorAll("button, [role=button], a, input[type=submit]")]
+          .filter((element) => {
+            const text = cleanText(element.innerText || element.value);
+            return text === expected || text.includes(expected);
+          });
       }
+    } catch {
+      candidates = [];
     }
-    if (target.text) {
-      const expected = cleanText(target.text);
-      const textCandidates = document.querySelectorAll("button, [role=button], a, input[type=submit]");
-      for (const element of textCandidates) {
-        const text = cleanText(element.innerText || element.value);
-        if (text === expected || text.includes(expected)) candidates.add(element);
-      }
-    }
-    return [...candidates].filter((element) => !requireVisible || isVisible(element));
+    return candidates
+      .filter((element) => targetMatchesShape(element, target))
+      .filter((element) => !requireVisible || isVisible(element));
   }
 
   function resolveTarget(target = {}, options = {}) {
-    const candidates = findTargetCandidates(target, options);
-    if (!candidates.length) return { status: "notFound", candidates };
-    if (options.unique && candidates.length > 1) return { status: "ambiguous", candidates };
-    return { status: "resolved", element: candidates[0], candidates };
+    const strategies = ["id", "css", "name", "ariaLabel", "placeholder", "text"];
+    for (const strategy of strategies) {
+      const candidates = findTargetCandidates(target, strategy, options);
+      if (!candidates.length) continue;
+      if (options.unique && candidates.length > 1) return { status: "ambiguous", candidates, strategy };
+      return { status: "resolved", element: candidates[0], candidates, strategy };
+    }
+    return { status: "notFound", candidates: [] };
   }
 
   function findTarget(target = {}, { requireVisible = true } = {}) {
@@ -255,6 +260,7 @@
     const result = await chrome.runtime.sendMessage({
       protocolVersion: PROTOCOL_VERSION,
       type: "runtime.getStepValue",
+      requestId: createId("request"),
       payload: {
         runId: runContext.runId,
         profileId: runContext.profileId,
@@ -372,16 +378,18 @@
     return true;
   }
 
-  async function authorizeRun(profile, reason, manual) {
+  async function authorizeRun(profile, reason, manual, manualGrantId = "") {
     if (!runtimeSnapshot) await requestSnapshot();
     const result = await chrome.runtime.sendMessage({
       protocolVersion: PROTOCOL_VERSION,
       type: "runtime.startRun",
+      requestId: createId("request"),
       payload: {
         profileId: profile.id,
         expectedRevision: runtimeSnapshot?.revision || 0,
         sessionId,
-        reason: manual ? "manual" : reason
+        reason,
+        ...(manualGrantId ? { grantId: manualGrantId } : {})
       }
     });
     if (!result?.ok) {
@@ -397,11 +405,12 @@
     chrome.runtime.sendMessage({
       protocolVersion: PROTOCOL_VERSION,
       type: "runtime.finishRun",
+      requestId: createId("request"),
       payload: { runId }
     }).catch(() => undefined);
   }
 
-  async function queueProfile(profile, reason = "condition", { manual = false, resetCount = false, waitForResult = false } = {}) {
+  async function queueProfile(profile, reason = "condition", { manual = false, manualGrantId = "", resetCount = false, waitForResult = false } = {}) {
     if (!globalEnabled || !profile || (!manual && !profile.enabled) || !matchesProfile(profile, location.href)) return false;
     const state = ruleState(profile);
     if (["authorizing", "queued", "running"].includes(state.phase)) return false;
@@ -417,7 +426,7 @@
     state.queued = false;
     let authorization;
     try {
-      authorization = await authorizeRun(profile, reason, manual);
+      authorization = await authorizeRun(profile, reason, manual, manualGrantId);
     } catch (error) {
       state.phase = "armed";
       state.lastMessage = error.message || "运行授权失败";
@@ -707,22 +716,23 @@
     navigationTimer = window.setInterval(resetForNavigation, 500);
   }
 
-  async function applyProfile(profileId, force = false) {
+  async function applyProfile(profileId, { manualGrantId = "" } = {}) {
     const profile = profiles.find((item) => item.id === profileId);
     if (!profile) return { ok: false, message: "当前页面没有找到这条规则", code: "URL_MISMATCH" };
     const normalized = normalizeProfile(profile);
     if (!isSupportedProfile(normalized)) return { ok: false, message: "规则包含当前版本不支持的动作或数据版本" };
-    if (!force && (!normalized.enabled || !globalEnabled || !matchesProfile(normalized, location.href))) {
+    const manual = Boolean(manualGrantId);
+    if (!manual && (!normalized.enabled || !globalEnabled || !matchesProfile(normalized, location.href))) {
       return { ok: false, skipped: true, message: "规则未启用或不匹配当前页面" };
     }
     const state = ruleState(normalized);
-    if (!force) {
+    if (!manual) {
       queueProfile(normalized, "automatic").catch(() => undefined);
       return { ok: true, queued: true, message: "规则已加入执行队列" };
     }
     if (!globalEnabled) return { ok: false, message: "总开关已关闭，无法测试规则" };
     if (!matchesProfile(normalized, location.href)) return { ok: false, message: "规则与当前页面不匹配，无法测试" };
-    const queued = await queueProfile(normalized, "manual", { manual: true, resetCount: true, waitForResult: true });
+    const queued = await queueProfile(normalized, "manual", { manual: true, manualGrantId, resetCount: true, waitForResult: true });
     if (!queued) {
       return { ok: false, message: state.phase === "running" ? "规则正在执行" : "规则暂时无法加入执行队列" };
     }
@@ -869,18 +879,18 @@
       sendResponse({ ok: true, url: location.href, title: document.title });
       return false;
     }
-    if (message?.type === "runtime.requestManualRun") {
-      const expectedRevision = Number(message.payload?.expectedRevision);
+    if (message?.type === "runtime.manualRunAuthorized") {
+      const expectedRevision = Number(message.payload?.revision);
       const prepare = !runtimeSnapshot || (Number.isFinite(expectedRevision) && runtimeSnapshot.revision !== expectedRevision)
         ? requestSnapshot({ deferPageLoad: true })
         : Promise.resolve();
       prepare.then(() => {
         if (Number.isFinite(expectedRevision) && runtimeSnapshot?.revision !== expectedRevision) {
-          const error = new Error("页面规则版本已变化，请重新打开面板后重试");
+          const error = new Error("页面规则版本已变化，请从面板重新测试");
           error.code = "REVISION_STALE";
           throw error;
         }
-        return applyProfile(message.payload?.profileId, true);
+        return applyProfile(message.payload?.profileId, { manualGrantId: String(message.payload?.grantId || "") });
       })
         .then(sendResponse)
         .catch((error) => sendResponse({ ok: false, code: error.code || "MANUAL_RUN_FAILED", message: error.message }));

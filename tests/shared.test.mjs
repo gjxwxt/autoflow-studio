@@ -126,16 +126,16 @@ test("runtime diagnostics are redacted and URL query/hash is removed", () => {
       value: "private-value",
       password: "private-password",
       selector: "#password",
-      attempts: 2
+      attempt: 2
     }
   });
 
   assert.equal(event.page, "https://example.com/login");
   assert.equal(event.context.action, "fill");
-  assert.equal(event.context.selector, "#password");
-  assert.equal(event.context.attempts, 2);
+  assert.equal(event.context.attempt, 2);
   assert.equal("value" in event.context, false);
   assert.equal("password" in event.context, false);
+  assert.equal("selector" in event.context, false);
 });
 
 test("value-bearing action classification is explicit", () => {
@@ -143,4 +143,41 @@ test("value-bearing action classification is explicit", () => {
   assert.equal(shared.isValueBearingAction("select"), true);
   assert.equal(shared.isValueBearingAction("click"), false);
   assert.equal(shared.isValueBearingAction("check"), false);
+});
+
+test("runtime snapshot is an allowlisted DTO", () => {
+  const profile = baseProfile({ futureField: "do-not-send" });
+  profile.site.extra = "do-not-send";
+  profile.trigger = { ...shared.normalizeProfile(profile).trigger, extra: "do-not-send" };
+  profile.steps[0].futureField = "do-not-send";
+
+  const snapshot = shared.runtimeProfile(profile);
+  assert.equal(snapshot.futureField, undefined);
+  assert.equal(snapshot.site.extra, undefined);
+  assert.equal(snapshot.trigger.extra, undefined);
+  assert.equal(snapshot.steps[0].futureField, undefined);
+  assert.deepEqual(Object.keys(snapshot).sort(), ["enabled", "id", "name", "schemaVersion", "site", "steps", "trigger"]);
+});
+
+test("runtime diagnostics use allowlisted context and reject canary text", () => {
+  const event = shared.sanitizeRuntimeEvent({
+    event: "step.failed",
+    context: {
+      action: "fill",
+      reason: "CANARY_SECRET",
+      triggerType: "elementVisible",
+      matches: 2,
+      profileCount: 1,
+      attempt: 1,
+      revision: 3,
+      canary: "CANARY_SECRET"
+    }
+  });
+
+  assert.equal(event.context.action, "fill");
+  assert.equal(event.context.triggerType, "elementVisible");
+  assert.equal(event.context.matches, 2);
+  assert.equal(event.context.reason, undefined);
+  assert.equal(event.context.canary, undefined);
+  assert.doesNotMatch(JSON.stringify(event), /CANARY_SECRET/);
 });

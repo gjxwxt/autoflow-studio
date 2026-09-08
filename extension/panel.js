@@ -109,6 +109,7 @@
       const result = await chrome.runtime.sendMessage({
         protocolVersion: PROTOCOL_VERSION,
         type: "log.query",
+        requestId: createId("request"),
         payload: { limit: 100 }
       });
       state.runtimeEvents = Array.isArray(result?.events) ? result.events : [];
@@ -536,7 +537,9 @@
 
   async function persistState({ activeProfileId = state.activeId } = {}) {
     const result = await chrome.runtime.sendMessage({
+      protocolVersion: PROTOCOL_VERSION,
       type: "writeState",
+      requestId: createId("request"),
       expectedRevision: state.revision,
       state: {
         schemaVersion: 3,
@@ -1023,9 +1026,15 @@
       setStatus("已保存，正在测试当前页面…", false);
       try {
         await getCurrentTab();
-        const result = await sendToCurrentTab({
+        const result = await chrome.runtime.sendMessage({
+          protocolVersion: PROTOCOL_VERSION,
           type: "runtime.requestManualRun",
-          payload: { profileId: saved.id, expectedRevision: state.revision }
+          requestId: createId("request"),
+          payload: {
+            tabId: state.currentTab?.id,
+            profileId: saved.id,
+            expectedRevision: state.revision
+          }
         });
         if (!result?.ok) {
           setStatus(result?.message || "测试未完成", true);
@@ -1144,6 +1153,7 @@
       const result = await chrome.runtime.sendMessage({
         protocolVersion: PROTOCOL_VERSION,
         type: "log.clear",
+        requestId: createId("request"),
         payload: {}
       });
       if (!result?.ok) throw new Error(result?.message || "清空日志失败");

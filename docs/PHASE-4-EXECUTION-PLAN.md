@@ -218,3 +218,20 @@ test: promote browser and security contracts
 - Shared 测试覆盖 JIT 值隐藏、日志脱敏和 value-bearing action 分类。
 
 尚需完成 S7 的真实 Chrome 无痕验收与发布包安装回归；该项不能以 Node 单元测试替代。
+
+## 评审收口记录（2026-09-08）
+
+针对 main 与 codex/phase-4-runtime-foundation 的评审，本轮补齐了合并前的基础问题：
+
+- Locator 改为按 id → css → name → aria → placeholder → text 的策略阶梯解析，避免不同策略的候选结果直接求并集；
+- Run Lease 改为每个 runId 一个 storage.session key，避免多标签页读改写整张 Map 时互相覆盖；
+- 手动测试改为 Panel → Worker → 一次性 manual grant → Content，Content 不能再通过自报 reason: manual 获得停用规则的执行权限；
+- Runtime Snapshot 改为显式 allowlist DTO，不再通过 spread source 将未知字段带入 Content；
+- 日志 context 改为枚举/数值白名单，事件名和错误码统一注册，补齐 grant、snapshot、manual 和日志错误码；
+- writeState、log.batch、手动运行入口强制检查 protocolVersion，Picker 临时消息仍保留旧协议并明确为 Panel ↔ Content 辅助通道。
+
+本轮验证：
+
+- Node 合约/共享测试：13 项通过；
+- Chrome 无痕 Playwright 夹具：既有 13 项行为通过，并额外验证“强定位唯一命中不受同文本按钮干扰”；
+- 尚未宣称 S7 完成：正式包安装、干净 Chrome Profile、真实页面回归和最终 hash 门禁仍需另一次验收。

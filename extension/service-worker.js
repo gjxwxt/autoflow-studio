@@ -17,12 +17,15 @@ const {
 const BASE_ORIGIN = "https://atrust.inforbus.com";
 const DYNAMIC_PREFIX = "autofill-profile-";
 const LOG_KEY = "runtimeLogs";
-const LEASE_KEY = "runtimeLeases";
+const LEASE_KEY_PREFIX = "runtimeLease:";
+const GRANT_KEY_PREFIX = "manualGrant:";
 const MAX_LOGS = 500;
 const LEASE_TTL_MS = 10 * 60 * 1000;
+const GRANT_TTL_MS = 30 * 1000;
 let initializationPromise = null;
 let writeChain = Promise.resolve();
 let logWriteChain = Promise.resolve();
+let grantWriteChain = Promise.resolve();
 
 function runtimeError(code, message) {
   const error = new Error(message);
@@ -90,6 +93,13 @@ async function validateRuntimeSender(sender) {
     documentId: sender.documentId,
     href
   };
+}
+
+function validatePanelSender(sender) {
+  const extensionPrefix = `chrome-extension://${chrome.runtime.id}/`;
+  if (sender?.id !== chrome.runtime.id || !String(sender.url || "").startsWith(extensionPrefix)) {
+    throw runtimeError("PROTOCOL_INVALID", "消息来源不是扩展面板");
+  }
 }
 
 async function broadcastSnapshotUpdated(revision) {
@@ -196,15 +206,116 @@ async function getSnapshot(message, sender) {
   };
 }
 
-async function readLeases() {
-  const stored = await chrome.storage.session.get(LEASE_KEY);
-  const now = Date.now();
-  const previous = stored[LEASE_KEY] || {};
-  const leases = Object.fromEntries(Object.entries(previous).filter(([, lease]) => lease?.expiresAt > now));
-  if (Object.keys(leases).length !== Object.keys(previous).length) {
-    await chrome.storage.session.set({ [LEASE_KEY]: leases });
+async function requestManualRun(message, sender) {
+  validatePanelSender(sender);
+  const payload = message?.payload || {};
+  const tabId = Number(payload.tabId);
+  const profileId = String(payload.profileId || "");
+  const expectedRevision = Number(payload.expectedRevision);
+  if (!Number.isInteger(tabId) || !profileId || !Number.isFinite(expectedRevision)) {
+    throw runtimeError("PROTOCOL_INVALID", "手动运行请求参数无效");
   }
-  return leases;
+  const tab = await chrome.tabs.get(tabId);
+  const state = await readProfiles();
+  const profile = state.profiles.find((item) => item.id === profileId);
+  if (!profile || !matchesProfile(profile, tab.url || "")) {
+    throw runtimeError("URL_MISMATCH", "规则与当前页面不匹配");
+  }
+  if (!state.globalEnabled) throw runtimeError("GLOBAL_DISABLED", "总开关已关闭");
+  if (expectedRevision !== state.revision) throw runtimeError("REVISION_STALE", "页面规则版本已变化，请重新打开面板后重试");
+
+  const grantId = createId("grant");
+  await writeGrant({
+    grantId,
+    tabId,
+    frameId: 0,
+    profileId,
+    revision: state.revision,
+    expiresAt: Date.now() + GRANT_TTL_MS
+  });
+  const messageToContent = {
+    protocolVersion: PROTOCOL_VERSION,
+    type: "runtime.manualRunAuthorized",
+    requestId: message.requestId || createId("request"),
+    payload: { grantId, profileId, revision: state.revision }
+  };
+  try {
+    try {
+      const result = await chrome.tabs.sendMessage(tabId, messageToContent, { frameId: 0 });
+      return { ...(result || {}), requestId: message.requestId || messageToContent.requestId };
+    } catch {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ["shared.js", "content.js"] });
+      const result = await chrome.tabs.sendMessage(tabId, messageToContent, { frameId: 0 });
+      return { ...(result || {}), requestId: message.requestId || messageToContent.requestId };
+    }
+  } finally {
+    await chrome.storage.session.remove(grantKey(grantId));
+  }
+}
+
+function leaseKey(runId) {
+  return `${LEASE_KEY_PREFIX}${runId}`;
+}
+
+function grantKey(grantId) {
+  return `${GRANT_KEY_PREFIX}${grantId}`;
+}
+
+async function readLease(runId) {
+  if (!runId) return null;
+  const key = leaseKey(runId);
+  const stored = await chrome.storage.session.get(key);
+  const lease = stored[key];
+  if (!lease) return null;
+  if (lease.expiresAt <= Date.now()) {
+    await chrome.storage.session.remove(key);
+    return null;
+  }
+  return lease;
+}
+
+async function writeLease(lease) {
+  await chrome.storage.session.set({ [leaseKey(lease.runId)]: lease });
+}
+
+async function removeLease(runId) {
+  if (runId) await chrome.storage.session.remove(leaseKey(runId));
+}
+
+async function writeGrant(grant) {
+  await chrome.storage.session.set({ [grantKey(grant.grantId)]: grant });
+}
+
+async function readGrant(grantId) {
+  if (!grantId) return null;
+  const key = grantKey(grantId);
+  const stored = await chrome.storage.session.get(key);
+  const grant = stored[key];
+  if (!grant) return null;
+  if (grant.expiresAt <= Date.now()) {
+    await chrome.storage.session.remove(key);
+    return null;
+  }
+  return grant;
+}
+
+async function consumeGrant(grantId, identity, payload) {
+  let consumed;
+  const operation = grantWriteChain.catch(() => undefined).then(async () => {
+    const grant = await readGrant(grantId);
+    if (!grant
+      || grant.tabId !== identity.tabId
+      || grant.frameId !== identity.frameId
+      || grant.profileId !== payload.profileId
+      || grant.revision !== Number(payload.expectedRevision)) {
+      throw runtimeError(grant ? "GRANT_INVALID" : "GRANT_EXPIRED", "手动运行授权已失效，请从面板重新测试");
+    }
+    await chrome.storage.session.remove(grantKey(grantId));
+    consumed = grant;
+  });
+  grantWriteChain = operation.catch(() => undefined);
+  await operation;
+  return consumed;
 }
 
 async function startRun(message, sender) {
@@ -214,15 +325,17 @@ async function startRun(message, sender) {
   const profile = state.profiles.find((item) => item.id === payload.profileId);
   if (!profile || !matchesProfile(profile, identity.href)) throw runtimeError("URL_MISMATCH", "规则与当前页面不匹配");
   if (!state.globalEnabled) throw runtimeError("GLOBAL_DISABLED", "总开关已关闭");
-  const manual = payload.reason === "manual";
-  if (!manual && !profile.enabled) throw runtimeError("PROFILE_DISABLED", "规则已停用");
   const expectedRevision = Number(payload.expectedRevision);
   if (!Number.isFinite(expectedRevision) || expectedRevision !== state.revision) {
     throw runtimeError("REVISION_STALE", "页面规则版本已变化，请重新获取配置");
   }
+  if (payload.grantId) {
+    await consumeGrant(String(payload.grantId), identity, { profileId: profile.id, expectedRevision });
+  } else if (!profile.enabled) {
+    throw runtimeError("PROFILE_DISABLED", "规则已停用");
+  }
   const runId = createId("run");
-  const leases = await readLeases();
-  leases[runId] = {
+  await writeLease({
     runId,
     tabId: identity.tabId,
     frameId: identity.frameId,
@@ -231,16 +344,14 @@ async function startRun(message, sender) {
     profileId: profile.id,
     revision: state.revision,
     expiresAt: Date.now() + LEASE_TTL_MS
-  };
-  await chrome.storage.session.set({ [LEASE_KEY]: leases });
+  });
   return { ok: true, runId, revision: state.revision, documentId: identity.documentId };
 }
 
 async function getStepValue(message, sender) {
   const identity = await validateRuntimeSender(sender);
   const payload = message?.payload || {};
-  const leases = await readLeases();
-  const lease = leases[payload.runId];
+  const lease = await readLease(payload.runId);
   if (!lease
     || lease.tabId !== identity.tabId
     || lease.frameId !== identity.frameId
@@ -256,17 +367,16 @@ async function getStepValue(message, sender) {
   const step = profile.steps.find((item) => item.id === payload.stepId);
   if (!step || !isValueBearingAction(step.action)) throw runtimeError("PROTOCOL_INVALID", "请求的步骤不允许按需读取值");
   lease.expiresAt = Date.now() + LEASE_TTL_MS;
-  await chrome.storage.session.set({ [LEASE_KEY]: leases });
+  await writeLease(lease);
   return { ok: true, value: step.value ?? "" };
 }
 
 async function finishRun(message, sender) {
   const identity = await validateRuntimeSender(sender);
-  const leases = await readLeases();
-  const lease = leases[message?.payload?.runId];
+  const runId = message?.payload?.runId;
+  const lease = await readLease(runId);
   if (lease && lease.tabId === identity.tabId && lease.documentId === identity.documentId) {
-    delete leases[message.payload.runId];
-    await chrome.storage.session.set({ [LEASE_KEY]: leases });
+    await removeLease(runId);
   }
   return { ok: true };
 }
@@ -331,13 +441,29 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type === "writeState") return writeState(message, sendResponse);
-  if (message?.type === "syncContentScripts") {
-    syncContentScripts().catch(console.error);
-    return false;
+  if (message?.type === "writeState") {
+    if (message.protocolVersion !== PROTOCOL_VERSION) {
+      sendResponse({ ok: false, code: "PROTOCOL_INVALID", message: "不支持的消息协议版本" });
+      return false;
+    }
+    return writeState(message, sendResponse);
   }
   if (message?.type === "log.batch") {
+    if (message.protocolVersion !== PROTOCOL_VERSION) {
+      sendResponse({ ok: false, code: "PROTOCOL_INVALID", message: "不支持的消息协议版本" });
+      return false;
+    }
     return appendRuntimeEvents(message, sendResponse);
+  }
+  if (message?.type === "runtime.requestManualRun") {
+    if (message.protocolVersion !== PROTOCOL_VERSION) {
+      sendResponse({ ok: false, code: "PROTOCOL_INVALID", message: "不支持的消息协议版本" });
+      return false;
+    }
+    requestManualRun(message, sender)
+      .then(sendResponse)
+      .catch((error) => sendResponse({ ok: false, code: error.code || "MANUAL_RUN_FAILED", message: error.message || "手动运行失败" }));
+    return true;
   }
   handleMessage(message, sender)
     .then(sendResponse)

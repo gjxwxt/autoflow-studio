@@ -286,3 +286,9 @@ PROTOCOL_INVALID
 ## 明确暂缓
 
 本阶段暂不做：多 Flow 编辑器、AI Locator、网络触发、复杂变量、全面 iframe 支持、动态第三方插件、复杂 Timeline UI，以及没有行为收益的全面拆文件重构。
+
+本轮收口后的 Locator 使用策略阶梯：id → css → name + tag → aria-label → placeholder → text。当前策略找到候选后立即决定三态结果；副作用动作要求唯一候选，避免 Picker 同时保存多个特征时把不同策略的候选结果误合并。
+
+手动运行使用一次性 capability：Panel 先由 Worker 校验 tab、URL、profile 和 revision，再写入短时 manualGrant；Worker 向目标顶层 Content 下发 grant，Content 使用 grant 请求 runtime.startRun，Worker 消费 grant 后创建 run lease。Content 不能通过自报 reason: manual 绕过停用规则。
+
+日志事件名、错误码和 context 均采用 allowlist。context 目前只接受已知动作、触发原因、触发类型、阶段枚举，以及 matches、profileCount、attempt、revision 等有界数值；未知字符串和字段直接丢弃。

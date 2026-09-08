@@ -6,6 +6,27 @@
   const SUPPORTED_ACTIONS = Object.freeze(["fill", "check", "click", "select", "wait", "delay"]);
   const VALUE_BEARING_ACTIONS = Object.freeze(["fill", "select"]);
   const RUNTIME_EVENT_LEVELS = Object.freeze(["debug", "info", "warn", "error"]);
+  const RUNTIME_EVENT_NAMES = Object.freeze([
+    "locator.ambiguous",
+    "locator.not_found",
+    "locator.resolved",
+    "run.cancelled",
+    "run.failed",
+    "run.started",
+    "run.succeeded",
+    "runtime.navigation.failed",
+    "runtime.session.failed",
+    "runtime.session.snapshot",
+    "runtime.session.started",
+    "runtime.settings.changed",
+    "runtime.snapshot.failed",
+    "runtime.state.reset",
+    "scheduler.queued",
+    "scheduler.skipped",
+    "step.failed",
+    "step.started",
+    "step.succeeded"
+  ]);
   const RUNTIME_EVENT_CODES = Object.freeze([
     "LOCATOR_NOT_FOUND",
     "LOCATOR_AMBIGUOUS",
@@ -20,7 +41,15 @@
     "REVISION_STALE",
     "PERMISSION_DENIED",
     "UNSUPPORTED_FRAME",
-    "PROTOCOL_INVALID"
+    "PROTOCOL_INVALID",
+    "SNAPSHOT_FAILED",
+    "RUN_AUTHORIZATION_FAILED",
+    "STEP_VALUE_FAILED",
+    "MANUAL_RUN_FAILED",
+    "CONFIG_WRITE_FAILED",
+    "LOG_WRITE_FAILED",
+    "GRANT_INVALID",
+    "GRANT_EXPIRED"
   ]);
   const TARGET_KEYS = Object.freeze(["tag", "id", "name", "placeholder", "ariaLabel", "role", "type", "text", "css"]);
 
@@ -116,11 +145,38 @@
 
   function runtimeProfile(profile) {
     const source = normalizeProfile(profile);
+    const steps = source.steps.map((step) => ({
+      id: step.id,
+      label: step.label,
+      action: step.action,
+      secret: Boolean(step.secret),
+      enabled: step.enabled !== false,
+      timeoutMs: step.timeoutMs,
+      target: normalizeTarget(step.target),
+      ...(isValueBearingAction(step.action) ? { value: "", valueRequired: true } : { value: step.value ?? "" })
+    }));
     return {
-      ...source,
-      steps: source.steps.map((step) => isValueBearingAction(step.action)
-        ? { ...step, value: "", valueRequired: true }
-        : { ...step })
+      id: source.id,
+      name: source.name,
+      enabled: source.enabled,
+      schemaVersion: source.schemaVersion,
+      site: {
+        origin: source.site.origin,
+        pathPrefix: source.site.pathPrefix,
+        hashPrefix: source.site.hashPrefix
+      },
+      trigger: {
+        type: source.trigger.type,
+        target: normalizeTarget(source.trigger.target),
+        options: {
+          oncePerPage: source.trigger.options.oncePerPage !== false,
+          retriggerWhenReappears: Boolean(source.trigger.options.retriggerWhenReappears),
+          cooldownMs: source.trigger.options.cooldownMs,
+          timeoutMs: source.trigger.options.timeoutMs,
+          maxRuns: source.trigger.options.maxRuns
+        }
+      },
+      steps
     };
   }
 
@@ -136,11 +192,19 @@
   function sanitizeRuntimeContext(context) {
     if (!context || typeof context !== "object" || Array.isArray(context)) return {};
     const result = {};
+    const stringEnums = {
+      action: ["fill", "check", "click", "select", "wait", "delay"],
+      reason: ["pageLoad", "elementVisible", "userClick", "automatic", "manual"],
+      triggerType: ["pageLoad", "elementVisible", "userClick"],
+      phase: ["armed", "authorizing", "queued", "running", "cooldown", "completed", "failed", "cancelled"]
+    };
+    const numericKeys = new Set(["matches", "profileCount", "attempt", "revision"]);
     for (const [key, value] of Object.entries(context)) {
-      if (/value|password|secret|token|cookie|authorization|clipboard|payload/i.test(key)) continue;
-      if (typeof value === "string") result[key] = value.slice(0, 240);
-      else if (typeof value === "number" && Number.isFinite(value)) result[key] = value;
-      else if (typeof value === "boolean") result[key] = value;
+      if (Object.hasOwn(stringEnums, key)) {
+        if (typeof value === "string" && stringEnums[key].includes(value)) result[key] = value;
+      } else if (numericKeys.has(key) && typeof value === "number" && Number.isFinite(value)) {
+        result[key] = Math.max(0, Math.min(value, 100000));
+      }
     }
     return result;
   }
@@ -151,7 +215,7 @@
       timestamp: Number.isFinite(Number(source.timestamp)) ? Number(source.timestamp) : Date.now(),
       seq: Number.isFinite(Number(source.seq)) ? Number(source.seq) : 0,
       level: RUNTIME_EVENT_LEVELS.includes(source.level) ? source.level : "info",
-      event: String(source.event || "runtime.event").slice(0, 80),
+      event: RUNTIME_EVENT_NAMES.includes(source.event) ? source.event : "runtime.state.reset",
       code: RUNTIME_EVENT_CODES.includes(source.code) ? source.code : "",
       documentId: String(source.documentId || "").slice(0, 160),
       sessionId: String(source.sessionId || "").slice(0, 160),
@@ -326,6 +390,7 @@
     PROTOCOL_VERSION,
     RUNTIME_EVENT_CODES,
     RUNTIME_EVENT_LEVELS,
+    RUNTIME_EVENT_NAMES,
     VALUE_BEARING_ACTIONS,
     copyProfile,
     createId,
