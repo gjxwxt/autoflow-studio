@@ -21,7 +21,7 @@ const [archive, manifestPath] = process.argv.slice(2);
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 const listed = execFileSync("unzip", ["-Z1", archive], { encoding: "utf8" })
   .trim().split(/\r?\n/).filter(Boolean).sort();
-const required = ["manifest.json", "shared.js", "content.js", "service-worker.js", "panel.html", "panel.css", "panel.js"];
+const required = ["manifest.json", "shared.js", "content.js", "service-worker.js", "panel.html", "panel.css", "panel.js", "icons/icon16.png", "icons/icon32.png", "icons/icon48.png", "icons/icon128.png"];
 for (const file of required) {
   if (!listed.includes(file)) throw new Error(`打包缺少 ${file}`);
 }
