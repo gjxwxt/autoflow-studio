@@ -53,14 +53,21 @@ async function ensureStorage() {
     return;
   }
 
-  const profile = copyProfile(DEFAULT_ATRUST_PROFILE);
-  profile.enabled = Boolean(stored.enabled);
-  profile.steps[0].value = stored.username || "";
-  profile.steps[1].value = stored.password || "";
+  // Fresh installs start empty. Keep the legacy migration only when the old
+  // extension actually left configuration keys behind during an upgrade.
+  const hasLegacyConfig = ["enabled", "username", "password"].some((key) => stored[key] !== undefined);
+  const profiles = [];
+  if (hasLegacyConfig) {
+    const profile = copyProfile(DEFAULT_ATRUST_PROFILE);
+    profile.enabled = Boolean(stored.enabled);
+    profile.steps[0].value = stored.username || "";
+    profile.steps[1].value = stored.password || "";
+    profiles.push(profile);
+  }
   await chrome.storage.local.set({
     schemaVersion: 3,
-    profiles: [profile],
-    activeProfileId: profile.id,
+    profiles,
+    activeProfileId: profiles[0]?.id || "",
     globalEnabled: typeof stored.globalEnabled === "boolean" ? stored.globalEnabled : true,
     revision: 1
   });

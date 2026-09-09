@@ -1,6 +1,5 @@
 (() => {
   const {
-    DEFAULT_ATRUST_PROFILE,
     PROTOCOL_VERSION,
     copyProfile,
     createId,
@@ -698,7 +697,7 @@
     $("#globalEnabled").checked = state.globalEnabled;
     state.profiles = Array.isArray(stored.profiles) && stored.profiles.length
       ? stored.profiles.map(normalizeProfile)
-      : [copyProfile(DEFAULT_ATRUST_PROFILE)];
+      : [];
     state.activeId = "";
     state.view = "overview";
     state.editorDraft = null;

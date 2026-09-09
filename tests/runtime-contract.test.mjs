@@ -48,3 +48,11 @@ test("failed steps surface a run-level diagnostic with the step label", () => {
 test("adding a step waits for the user to choose whether it needs a DOM target", () => {
   assert.match(panelSource, /已添加步骤，请先选择执行动作/);
 });
+
+test("fresh installs start with no preset rules", () => {
+  assert.match(workerSource, /const hasLegacyConfig = \["enabled", "username", "password"\]/);
+  assert.match(workerSource, /const profiles = \[\];/);
+  assert.match(workerSource, /activeProfileId: profiles\[0\]\?\.id \|\| ""/);
+  assert.match(panelSource, /: \[\];/);
+  assert.doesNotMatch(panelSource, /: \[copyProfile\(DEFAULT_ATRUST_PROFILE\)\]/);
+});
