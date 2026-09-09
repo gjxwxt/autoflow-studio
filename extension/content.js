@@ -551,6 +551,15 @@
             runId: runContext.runId,
             durationMs: Date.now() - stepStartedAt
           });
+          emitRuntimeEvent("run.failed", {
+            level: "error",
+            code: result.code || "ACTION_FAILED",
+            profileId: profile.id,
+            stepId: step.id,
+            runId: runContext.runId,
+            durationMs: Date.now() - startedAt,
+            context: { action: step.action }
+          });
           return result;
         }
         emitRuntimeEvent("step.succeeded", {

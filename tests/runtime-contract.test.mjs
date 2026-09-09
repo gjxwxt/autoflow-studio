@@ -37,3 +37,14 @@ test("refresh is a terminal runtime action with loop protection", () => {
   assert.match(panelSource, /refresh: "刷新页面"/);
   assert.match(panelSource, /刷新页面必须是最后一个启用步骤/);
 });
+
+test("failed steps surface a run-level diagnostic with the step label", () => {
+  assert.match(contentSource, /emitRuntimeEvent\("step\.failed"/);
+  assert.match(contentSource, /emitRuntimeEvent\("run\.failed"/);
+  assert.match(panelSource, /function runtimeEventLabel\(event\)/);
+  assert.match(panelSource, /步骤失败.*勾选用户协议|runtimeStep\(event\)/);
+});
+
+test("adding a step waits for the user to choose whether it needs a DOM target", () => {
+  assert.match(panelSource, /已添加步骤，请先选择执行动作/);
+});

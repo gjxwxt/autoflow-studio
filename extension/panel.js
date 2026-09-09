@@ -67,7 +67,9 @@
     "step.failed": "步骤失败",
     "locator.resolved": "元素已定位",
     "locator.not_found": "找不到元素",
-    "locator.ambiguous": "元素匹配不唯一"
+    "locator.ambiguous": "元素匹配不唯一",
+    "runtime.session.failed": "页面运行时初始化失败",
+    "runtime.snapshot.failed": "无法读取页面规则"
   });
 
   function setStatus(message, isError = false) {
@@ -94,16 +96,37 @@
     return state.runtimeEvents.filter((event) => !page || event.page === page);
   }
 
+  function runtimeStep(event) {
+    if (!event?.profileId || !event?.stepId) return null;
+    return state.profiles.find((profile) => profile.id === event.profileId)?.steps
+      ?.find((step) => step.id === event.stepId) || null;
+  }
+
+  function runtimeEventLabel(event) {
+    const label = RUNTIME_EVENT_LABELS[event.event] || event.event;
+    const step = runtimeStep(event);
+    return step?.label ? `${label}：${step.label}` : label;
+  }
+
+  function runtimeEventDetail(event) {
+    return [event.code, event.context?.action].filter(Boolean).join(" · ");
+  }
+
   function renderRuntimeStatus() {
     const container = $("#runtimeStatus");
     const text = $("#runtimeStatusText");
     if (!container || !text) return;
     const events = relevantRuntimeEvents();
-    const latest = [...events].reverse().find((event) => ["run.succeeded", "run.failed", "run.cancelled", "run.navigation_requested", "scheduler.queued", "scheduler.skipped"].includes(event.event));
+    const latest = [...events].reverse().find((event) => [
+      "run.succeeded", "run.failed", "run.cancelled", "run.navigation_requested",
+      "step.failed", "locator.not_found", "locator.ambiguous", "runtime.session.failed",
+      "runtime.snapshot.failed", "scheduler.queued", "scheduler.skipped"
+    ].includes(event.event));
     container.hidden = !latest;
     if (!latest) return;
-    text.textContent = `${RUNTIME_EVENT_LABELS[latest.event] || latest.event}${latest.code ? ` · ${latest.code}` : ""}`;
-    container.classList.toggle("runtime-status-error", latest.level === "error" || latest.event === "run.failed");
+    const detail = runtimeEventDetail(latest);
+    text.textContent = `${runtimeEventLabel(latest)}${detail ? ` · ${detail}` : ""}`;
+    container.classList.toggle("runtime-status-error", latest.level === "error" || ["run.failed", "step.failed", "locator.not_found", "locator.ambiguous", "runtime.session.failed", "runtime.snapshot.failed"].includes(latest.event));
   }
 
   async function loadRuntimeLogs() {
@@ -134,12 +157,12 @@
       return;
     }
     for (const event of events) {
-      const row = makeElement("div", `runtime-log-row ${event.level === "error" || event.event === "run.failed" ? "error" : ""}`);
+      const row = makeElement("div", `runtime-log-row ${event.level === "error" || ["run.failed", "step.failed", "locator.not_found", "locator.ambiguous"].includes(event.event) ? "error" : ""}`);
       const time = new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
       row.append(
         makeElement("span", "runtime-log-time", time),
-        makeElement("span", "runtime-log-event", RUNTIME_EVENT_LABELS[event.event] || event.event),
-        makeElement("span", "runtime-log-code", event.code || event.context?.action || "")
+        makeElement("span", "runtime-log-event", runtimeEventLabel(event)),
+        makeElement("span", "runtime-log-code", runtimeEventDetail(event))
       );
       list.append(row);
     }
@@ -1247,13 +1270,12 @@
     if (!profile) return;
     const collapsedSteps = collapsedStepsFor(profile);
     profile.steps.forEach((step) => collapsedSteps.add(step.id));
-    const index = profile.steps.length;
     const step = { id: createId("step"), label: "新步骤", action: "fill", secret: false, value: "", enabled: true, timeoutMs: 12000, target: {} };
     profile.steps.push(step);
     markEditorDirty();
     collapsedSteps.delete(step.id);
     renderEditor();
-    startPicker("step", index);
+    setStatus("已添加步骤，请先选择执行动作；需要目标元素时再点击“选择元素”。", false);
   });
   $("#saveProfile").addEventListener("click", () => saveProfile(false));
   $("#testProfile").addEventListener("click", () => saveProfile(true));
