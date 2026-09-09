@@ -3,7 +3,7 @@
   const CURRENT_SCHEMA_VERSION = 3;
   const PROTOCOL_VERSION = 1;
   const UNSUPPORTED_ACTION = "__unsupported__";
-  const SUPPORTED_ACTIONS = Object.freeze(["fill", "check", "click", "select", "wait", "delay"]);
+  const SUPPORTED_ACTIONS = Object.freeze(["fill", "check", "click", "select", "wait", "delay", "refresh"]);
   const VALUE_BEARING_ACTIONS = Object.freeze(["fill", "select"]);
   const RUNTIME_EVENT_LEVELS = Object.freeze(["debug", "info", "warn", "error"]);
   const RUNTIME_EVENT_NAMES = Object.freeze([
@@ -12,6 +12,7 @@
     "locator.resolved",
     "run.cancelled",
     "run.failed",
+    "run.navigation_requested",
     "run.started",
     "run.succeeded",
     "runtime.navigation.failed",
@@ -32,6 +33,7 @@
     "LOCATOR_AMBIGUOUS",
     "ACTION_UNSUPPORTED",
     "ACTION_FAILED",
+    "REFRESH_GUARDED",
     "RUN_CANCELLED",
     "RUN_STALE",
     "RUN_TIMEOUT",
@@ -193,10 +195,10 @@
     if (!context || typeof context !== "object" || Array.isArray(context)) return {};
     const result = {};
     const stringEnums = {
-      action: ["fill", "check", "click", "select", "wait", "delay"],
+      action: ["fill", "check", "click", "select", "wait", "delay", "refresh"],
       reason: ["pageLoad", "elementVisible", "userClick", "automatic", "manual"],
       triggerType: ["pageLoad", "elementVisible", "userClick"],
-      phase: ["armed", "authorizing", "queued", "running", "cooldown", "completed", "failed", "cancelled"]
+      phase: ["armed", "authorizing", "queued", "running", "cooldown", "completed", "failed", "cancelled", "navigation"]
     };
     const numericKeys = new Set(["matches", "profileCount", "attempt", "revision"]);
     for (const [key, value] of Object.entries(context)) {
@@ -303,6 +305,11 @@
         timeoutMs: boundedNumber(field.timeoutMs, 12000, 1000, 120000),
         target: normalizeTarget(field.target)
       };
+      if (action === "refresh") {
+        step.secret = false;
+        step.value = "";
+        step.target = {};
+      }
       if (action === UNSUPPORTED_ACTION) step.unsupportedAction = String(rawAction);
       return step;
     });

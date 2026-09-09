@@ -148,7 +148,9 @@ Trigger 和 Action 使用静态 Registry 扩展，不引入第三方动态插件
 
 ```text
 TriggerRegistry: pageLoad / elementVisible / userClick
-ActionRegistry: fill / click / check / select / wait / delay
+ActionRegistry: fill / click / check / select / wait / delay / refresh
+
+`refresh` 是终止性 Action，不选择 DOM 元素；执行后请求当前页面刷新，当前 Run 不再继续后续步骤。为避免同一规则在页面加载后立即形成刷新环，Content Runtime 使用当前标签页的 `sessionStorage` 做 30 秒短时保护，并记录 `run.navigation_requested`。
 ```
 
 ## Locator 契约

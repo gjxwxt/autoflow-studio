@@ -143,6 +143,26 @@ test("value-bearing action classification is explicit", () => {
   assert.equal(shared.isValueBearingAction("select"), true);
   assert.equal(shared.isValueBearingAction("click"), false);
   assert.equal(shared.isValueBearingAction("check"), false);
+  assert.equal(shared.isValueBearingAction("refresh"), false);
+});
+
+test("refresh is a supported terminal action without a target value", () => {
+  const profile = shared.normalizeProfile(baseProfile({
+    steps: [{ id: "step-refresh", label: "刷新页面", action: "refresh", value: "ignored", target: { id: "stale" } }]
+  }));
+  assert.equal(shared.isSupportedProfile(profile), true);
+  assert.equal(profile.steps[0].action, "refresh");
+  assert.equal(profile.steps[0].value, "");
+  assert.deepEqual(Object.keys(profile.steps[0].target), []);
+  assert.equal(shared.runtimeProfile(profile).steps[0].value, "");
+
+  const event = shared.sanitizeRuntimeEvent({
+    event: "run.navigation_requested",
+    context: { action: "refresh", phase: "navigation" }
+  });
+  assert.equal(event.event, "run.navigation_requested");
+  assert.equal(event.context.action, "refresh");
+  assert.equal(event.context.phase, "navigation");
 });
 
 test("runtime snapshot is an allowlisted DTO", () => {

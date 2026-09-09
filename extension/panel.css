@@ -145,6 +145,7 @@ input:focus, select:focus { border-color: color-mix(in oklch, var(--primary) 65%
 .remove-button:hover { background: color-mix(in oklch, var(--danger) 10%, white); color: var(--danger); }
 .rule-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .8fr); min-width: 0; gap: 7px; }
 .rule-controls > * { min-width: 0; }
+.step-terminal-hint { grid-column: 1 / -1; color: var(--muted); font-family: inherit; }
 .target-line { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; margin-bottom: 7px; }
 .target-chip { display: block; min-width: 0; max-width: 100%; overflow: hidden; padding: 6px 8px; border-radius: 7px; background: var(--surface-subtle); color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .target-line .target-chip, .trigger-card .target-chip { flex: 1; }

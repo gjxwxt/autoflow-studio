@@ -29,3 +29,11 @@ test("worker owns snapshot broadcast, leases, and session-only diagnostics", () 
   assert.match(workerSource, /GRANT_KEY_PREFIX/);
   assert.match(workerSource, /case "log.clear": return clearRuntimeLogs()/);
 });
+
+test("refresh is a terminal runtime action with loop protection", () => {
+  assert.match(contentSource, /REFRESH_GUARD_TTL_MS = 30000/);
+  assert.match(contentSource, /navigationRequested: true/);
+  assert.match(contentSource, /window\.location\.reload\(\)/);
+  assert.match(panelSource, /refresh: "刷新页面"/);
+  assert.match(panelSource, /刷新页面必须是最后一个启用步骤/);
+});

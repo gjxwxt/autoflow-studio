@@ -19,7 +19,8 @@
     select: "选择",
     click: "点击",
     wait: "等待出现",
-    delay: "等待时间"
+    delay: "等待时间",
+    refresh: "刷新页面"
   });
   const state = {
     profiles: [],
@@ -58,6 +59,7 @@
     "scheduler.skipped": "规则未执行",
     "run.started": "流程开始执行",
     "run.succeeded": "流程执行成功",
+    "run.navigation_requested": "已请求刷新页面",
     "run.failed": "流程执行失败",
     "run.cancelled": "流程已取消",
     "step.started": "步骤开始",
@@ -97,7 +99,7 @@
     const text = $("#runtimeStatusText");
     if (!container || !text) return;
     const events = relevantRuntimeEvents();
-    const latest = [...events].reverse().find((event) => ["run.succeeded", "run.failed", "run.cancelled", "scheduler.queued", "scheduler.skipped"].includes(event.event));
+    const latest = [...events].reverse().find((event) => ["run.succeeded", "run.failed", "run.cancelled", "run.navigation_requested", "scheduler.queued", "scheduler.skipped"].includes(event.event));
     container.hidden = !latest;
     if (!latest) return;
     text.textContent = `${RUNTIME_EVENT_LABELS[latest.event] || latest.event}${latest.code ? ` · ${latest.code}` : ""}`;
@@ -804,7 +806,9 @@
 
     if (collapsed) {
       const summary = makeElement("div", "step-collapsed-summary");
-      const summaryTarget = step.action === "delay" ? `${Number(step.value) || 0} ms` : targetSummary(step.target);
+      const summaryTarget = step.action === "delay"
+        ? `${Number(step.value) || 0} ms`
+        : step.action === "refresh" ? "执行后刷新当前页面" : targetSummary(step.target);
       const summaryChip = makeElement("span", "target-chip", summaryTarget);
       summaryChip.title = summaryTarget;
       summary.append(
@@ -815,7 +819,7 @@
       return row;
     }
 
-    if (step.action !== "delay") {
+    if (!(["delay", "refresh"].includes(step.action))) {
       const targetLine = makeElement("div", "target-line");
       const targetText = targetSummary(step.target);
       const targetChip = makeElement("span", "target-chip", targetText);
@@ -837,7 +841,16 @@
       action.append(option);
     }
     action.value = step.action;
-    action.addEventListener("change", () => { step.action = action.value; markEditorDirty(); renderEditor(); });
+    action.addEventListener("change", () => {
+      step.action = action.value;
+      if (step.action === "refresh") {
+        step.target = {};
+        step.value = "";
+        step.secret = false;
+      }
+      markEditorDirty();
+      renderEditor();
+    });
     controls.append(action);
 
     if (step.action === "check") {
@@ -868,6 +881,10 @@
       timeout.placeholder = "超时毫秒";
       timeout.addEventListener("input", () => { step.timeoutMs = Number(timeout.value) || 12000; markEditorDirty(); });
       controls.append(timeout);
+    } else if (step.action === "refresh") {
+      const refreshHint = makeElement("span", "target-chip step-terminal-hint", "执行后刷新当前页面，流程在此结束");
+      refreshHint.title = "为避免循环刷新，同一规则短时间内只允许请求一次刷新";
+      controls.append(refreshHint);
     } else if (step.action !== "click") {
       const value = document.createElement("input");
       value.type = step.secret ? "password" : "text";
@@ -1004,6 +1021,10 @@
       profile.site.hashPrefix = $("#siteHash").value.trim();
       profile.enabled = $("#profileEnabled").checked;
       profile.trigger = normalizeProfile(profile).trigger;
+      const refreshIndex = profile.steps.findIndex((step) => step.enabled !== false && step.action === "refresh");
+      if (refreshIndex >= 0 && profile.steps.slice(refreshIndex + 1).some((step) => step.enabled !== false)) {
+        throw new Error("刷新页面必须是最后一个启用步骤");
+      }
       const triggerTarget = profile.trigger.target || {};
       const hasTriggerTarget = ["id", "name", "placeholder", "ariaLabel", "css", "text"]
         .some((key) => String(triggerTarget[key] || "").trim());

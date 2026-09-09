@@ -33,6 +33,8 @@
   const runQueue = [];
   const ruleStates = new Map();
   const deferredPageLoadIds = new Set();
+  const REFRESH_GUARD_TTL_MS = 30000;
+  const REFRESH_GUARD_PREFIX = "__autoflow_refresh_guard__:";
 
   function emitRuntimeEvent(event, details = {}) {
     const item = sanitizeRuntimeEvent({
@@ -134,6 +136,19 @@
     return String(value || "").replace(/\s+/g, " ").trim();
   }
 
+  function claimRefreshGuard(profileId) {
+    const key = `${REFRESH_GUARD_PREFIX}${encodeURIComponent(String(profileId || "unknown"))}`;
+    const now = Date.now();
+    try {
+      const expiresAt = Number(sessionStorage.getItem(key) || 0);
+      if (expiresAt > now) return false;
+      sessionStorage.setItem(key, String(now + REFRESH_GUARD_TTL_MS));
+    } catch {
+      // A page may block sessionStorage; the refresh action remains usable.
+    }
+    return true;
+  }
+
   function cssEscape(value) {
     return window.CSS?.escape ? window.CSS.escape(value) : String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
   }
@@ -226,6 +241,20 @@
 
   const ACTION_HANDLERS = Object.freeze({
     wait: async ({ guard }) => { guard(); return { ok: true }; },
+    refresh: async ({ guard, runContext, step }) => {
+      guard();
+      if (!claimRefreshGuard(runContext?.profileId)) {
+        return { ok: false, code: "REFRESH_GUARDED", message: "刷新保护已生效，已阻止连续刷新。" };
+      }
+      emitRuntimeEvent("run.navigation_requested", {
+        profileId: runContext?.profileId,
+        stepId: step.id,
+        runId: runContext?.runId,
+        context: { action: "refresh" }
+      });
+      flushRuntimeEvents();
+      return { ok: true, navigationRequested: true };
+    },
     check: async ({ input, step, guard }) => {
       guard();
       const desired = step.value === true || step.value === "true" || step.value === 1;
@@ -286,6 +315,10 @@
       await wait(delayMs, signal);
       guard();
       return { ok: true };
+    }
+
+    if (resolvedStep.action === "refresh") {
+      return ACTION_HANDLERS.refresh({ step: resolvedStep, signal, guard, runContext });
     }
 
     const unique = ["fill", "click", "check", "select"].includes(resolvedStep.action);
@@ -402,7 +435,7 @@
 
   async function releaseRun(runId) {
     if (!runId) return;
-    chrome.runtime.sendMessage({
+    await chrome.runtime.sendMessage({
       protocolVersion: PROTOCOL_VERSION,
       type: "runtime.finishRun",
       requestId: createId("request"),
@@ -499,6 +532,13 @@
         const stepStartedAt = Date.now();
         emitRuntimeEvent("step.started", { profileId: profile.id, stepId: step.id, runId: runContext.runId, context: { action: step.action } });
         const result = await executeStep(step, controller.signal, guard, runContext);
+        if (result.navigationRequested) {
+          state.phase = "navigation";
+          state.lastMessage = "已请求刷新页面";
+          await releaseRun(runContext.runId);
+          window.setTimeout(() => window.location.reload(), 50);
+          return { ok: true, navigationRequested: true, message: state.lastMessage, reason };
+        }
         if (!isCurrentRun(profile, state, runToken, generation, pageHref)) throw new DOMException("流程已取消", "AbortError");
         if (!result.ok) {
           state.phase = "failed";
