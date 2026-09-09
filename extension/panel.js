@@ -1122,7 +1122,7 @@
     state.statusMessage = "";
     state.statusError = false;
     render();
-    setStatus(site.origin ? `${useCurrentPage ? "已从当前页面" : "已从粘贴的 URL"}提取来源、路径和 Hash，点击“选择元素”开始配置。` : "填写网站来源后，点击“选择元素”开始配置。", false);
+    setStatus(site.origin ? `${useCurrentPage ? "已从当前页面" : "已从粘贴的 URL"}提取来源、路径和 Hash，点击“添加步骤”开始配置。` : "填写网站来源后，点击“添加步骤”开始配置。", false);
     return true;
   }
 
