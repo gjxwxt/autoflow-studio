@@ -198,7 +198,8 @@
       action: ["fill", "check", "click", "select", "wait", "delay", "refresh"],
       reason: ["pageLoad", "elementVisible", "userClick", "automatic", "manual"],
       triggerType: ["pageLoad", "elementVisible", "userClick"],
-      phase: ["armed", "authorizing", "queued", "running", "cooldown", "completed", "failed", "cancelled", "navigation"]
+      phase: ["armed", "authorizing", "queued", "running", "cooldown", "completed", "failed", "cancelled", "navigation"],
+      resetReason: ["snapshotLoaded", "navigation", "settingsChanged", "bfcacheRestore", "unspecified"]
     };
     const numericKeys = new Set(["matches", "profileCount", "attempt", "revision"]);
     for (const [key, value] of Object.entries(context)) {

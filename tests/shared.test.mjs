@@ -136,6 +136,13 @@ test("runtime diagnostics are redacted and URL query/hash is removed", () => {
   assert.equal("value" in event.context, false);
   assert.equal("password" in event.context, false);
   assert.equal("selector" in event.context, false);
+
+  const reset = shared.sanitizeRuntimeEvent({
+    event: "runtime.state.reset",
+    context: { resetReason: "settingsChanged", canary: "CANARY_SECRET" }
+  });
+  assert.equal(reset.context.resetReason, "settingsChanged");
+  assert.doesNotMatch(JSON.stringify(reset), /CANARY_SECRET/);
 });
 
 test("value-bearing action classification is explicit", () => {

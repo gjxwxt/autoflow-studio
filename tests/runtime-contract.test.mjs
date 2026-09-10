@@ -33,9 +33,25 @@ test("worker owns snapshot broadcast, leases, and session-only diagnostics", () 
 test("refresh is a terminal runtime action with loop protection", () => {
   assert.match(contentSource, /REFRESH_GUARD_TTL_MS = 30000/);
   assert.match(contentSource, /navigationRequested: true/);
+  assert.match(contentSource, /let navigationPending = false/);
+  assert.match(contentSource, /navigationPending = true/);
+  assert.match(contentSource, /if \(navigationPending\) return false;/);
+  assert.match(contentSource, /if \(navigationPending\) return;/);
   assert.match(contentSource, /window\.location\.reload\(\)/);
   assert.match(panelSource, /refresh: "刷新页面"/);
   assert.match(panelSource, /刷新页面必须是最后一个启用步骤/);
+});
+
+test("normal pageshow does not cancel a run; BFCache restore does", () => {
+  assert.match(contentSource, /window\.addEventListener\("pageshow", \(event\) => \{/);
+  assert.match(contentSource, /if \(event\.persisted\) \{/);
+  assert.match(contentSource, /resetReason: "bfcacheRestore"/);
+});
+
+test("runtime reset and locator diagnostics retain safe correlation details", () => {
+  assert.match(contentSource, /context: \{ resetReason \}/);
+  assert.match(contentSource, /emitRuntimeEvent\("locator\.resolved", \{ profileId: runContext\?\.profileId/);
+  assert.match(workerSource, /case "log\.clear": return clearRuntimeLogs\(\)/);
 });
 
 test("failed steps surface a run-level diagnostic with the step label", () => {

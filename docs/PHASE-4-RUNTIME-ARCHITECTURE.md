@@ -293,6 +293,6 @@ PROTOCOL_INVALID
 
 手动运行使用一次性 capability：Panel 先由 Worker 校验 tab、URL、profile 和 revision，再写入短时 manualGrant；Worker 向目标顶层 Content 下发 grant，Content 使用 grant 请求 runtime.startRun，Worker 消费 grant 后创建 run lease。Content 不能通过自报 reason: manual 绕过停用规则。
 
-日志事件名、错误码和 context 均采用 allowlist。context 目前只接受已知动作、触发原因、触发类型、阶段枚举，以及 matches、profileCount、attempt、revision 等有界数值；未知字符串和字段直接丢弃。
+日志事件名、错误码和 context 均采用 allowlist。context 目前只接受已知动作、触发原因、触发类型、阶段、运行时重置原因等枚举，以及 matches、profileCount、attempt、revision 等有界数值；未知字符串和字段直接丢弃。
 
-2026-09-09 增加终止性 `refresh` Action：它不绑定 DOM，执行后先释放当前 Run 租约，再延迟请求页面刷新；Panel 将 `step.failed`、定位失败和 `run.failed` 关联到规则步骤名称，避免仅显示“流程失败”而无法判断是哪个步骤出错。新增步骤默认不再自动打开拾取器，用户先选动作，只有需要 DOM 目标的动作再主动拾取元素。
+2026-09-09 增加终止性 `refresh` Action：它不绑定 DOM，执行后先释放当前 Run 租约，再延迟请求页面刷新；页面导航 pending 期间阻止同一文档的其他自动运行，避免刷新前抢跑 pageLoad 规则。Panel 将 `step.failed`、定位失败和 `run.failed` 关联到规则步骤名称，避免仅显示“流程失败”而无法判断是哪个步骤出错。新增步骤默认不再自动打开拾取器，用户先选动作，只有需要 DOM 目标的动作再主动拾取元素。

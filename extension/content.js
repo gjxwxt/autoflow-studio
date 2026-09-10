@@ -27,6 +27,7 @@
   let navigationTimer = 0;
   let scanDirty = false;
   let lastUrl = location.href;
+  let navigationPending = false;
   let drainingQueue = false;
   let runtimeGeneration = 0;
   let nextRunToken = 0;
@@ -82,7 +83,7 @@
       profiles = Array.isArray(result.profiles) ? result.profiles.map(normalizeProfile).filter(isSupportedProfile) : [];
       globalEnabled = result.globalEnabled !== false;
       deferPageLoadUntilNavigation = deferPageLoad;
-      resetRuntimeStates();
+      resetRuntimeStates({ resetReason: "snapshotLoaded" });
       if (deferPageLoad && globalEnabled) {
         for (const profile of matchingProfiles()) {
           const triggerType = profile.trigger?.type || "pageLoad";
@@ -330,15 +331,15 @@
     );
     guard();
     if (!resolution || resolution.status === "notFound") {
-      emitRuntimeEvent("locator.not_found", { level: "warn", code: "LOCATOR_NOT_FOUND", stepId: resolvedStep.id, runId: runContext?.runId });
+      emitRuntimeEvent("locator.not_found", { level: "warn", code: "LOCATOR_NOT_FOUND", profileId: runContext?.profileId, stepId: resolvedStep.id, runId: runContext?.runId });
       return { ok: false, code: "LOCATOR_NOT_FOUND", message: `找不到：${resolvedStep.label || targetSummary(resolvedStep.target)}` };
     }
     if (resolution.status === "ambiguous") {
-      emitRuntimeEvent("locator.ambiguous", { level: "warn", code: "LOCATOR_AMBIGUOUS", stepId: resolvedStep.id, runId: runContext?.runId, context: { matches: resolution.candidates.length } });
+      emitRuntimeEvent("locator.ambiguous", { level: "warn", code: "LOCATOR_AMBIGUOUS", profileId: runContext?.profileId, stepId: resolvedStep.id, runId: runContext?.runId, context: { matches: resolution.candidates.length } });
       return { ok: false, code: "LOCATOR_AMBIGUOUS", message: `目标不唯一：${resolvedStep.label || targetSummary(resolvedStep.target)}` };
     }
     const element = unique ? resolution.element : resolution;
-    emitRuntimeEvent("locator.resolved", { stepId: resolvedStep.id, runId: runContext?.runId, context: { matches: unique ? resolution.candidates.length : 1 } });
+    emitRuntimeEvent("locator.resolved", { profileId: runContext?.profileId, stepId: resolvedStep.id, runId: runContext?.runId, context: { matches: unique ? resolution.candidates.length : 1 } });
     const input = inputForLabel(element);
     const handler = ACTION_HANDLERS[resolvedStep.action];
     if (!handler) return { ok: false, code: "ACTION_UNSUPPORTED", message: `不支持的动作：${resolvedStep.action}` };
@@ -379,7 +380,7 @@
     return next;
   }
 
-  function resetRuntimeStates({ clearDeferred = true } = {}) {
+  function resetRuntimeStates({ clearDeferred = true, resetReason = "unspecified" } = {}) {
     runtimeGeneration += 1;
     for (const state of ruleStates.values()) {
       state.controller?.abort();
@@ -397,7 +398,7 @@
     scanTimer = 0;
     scanMaxTimer = 0;
     scanDirty = false;
-    emitRuntimeEvent("runtime.state.reset");
+    emitRuntimeEvent("runtime.state.reset", { context: { resetReason } });
   }
 
   function canQueue(profile, state, manual = false) {
@@ -444,6 +445,7 @@
   }
 
   async function queueProfile(profile, reason = "condition", { manual = false, manualGrantId = "", resetCount = false, waitForResult = false } = {}) {
+    if (navigationPending) return false;
     if (!globalEnabled || !profile || (!manual && !profile.enabled) || !matchesProfile(profile, location.href)) return false;
     const state = ruleState(profile);
     if (["authorizing", "queued", "running"].includes(state.phase)) return false;
@@ -472,6 +474,11 @@
       return false;
     }
     if (runtimeGeneration !== state.generation || ruleStates.get(profile.id) !== state) {
+      await releaseRun(authorization.runId);
+      state.phase = "cancelled";
+      return false;
+    }
+    if (navigationPending) {
       await releaseRun(authorization.runId);
       state.phase = "cancelled";
       return false;
@@ -535,6 +542,7 @@
         if (result.navigationRequested) {
           state.phase = "navigation";
           state.lastMessage = "已请求刷新页面";
+          navigationPending = true;
           await releaseRun(runContext.runId);
           window.setTimeout(() => window.location.reload(), 50);
           return { ok: true, navigationRequested: true, message: state.lastMessage, reason };
@@ -624,6 +632,13 @@
           item.resolve?.({ ok: false, cancelled: true, message: "流程已取消" });
           continue;
         }
+        if (navigationPending) {
+          state.phase = "cancelled";
+          state.queued = false;
+          await releaseRun(runId);
+          item.resolve?.({ ok: false, cancelled: true, message: "页面即将刷新，流程已取消" });
+          continue;
+        }
         if (!globalEnabled || (!manual && !profile.enabled) || !matchesProfile(profile, location.href)) {
           state.phase = "armed";
           state.queued = false;
@@ -672,10 +687,12 @@
   });
 
   function evaluateRules() {
+    if (navigationPending) return;
     if (location.href !== lastUrl) {
       lastUrl = location.href;
+      navigationPending = false;
       deferPageLoadUntilNavigation = false;
-      resetRuntimeStates();
+      resetRuntimeStates({ resetReason: "navigation" });
       runtimeSnapshot = null;
       profiles = [];
       globalEnabled = false;
@@ -693,6 +710,10 @@
   function scheduleAutoRun() {
     window.clearTimeout(scanTimer);
     scanDirty = true;
+    if (navigationPending) {
+      scanDirty = false;
+      return;
+    }
     scanTimer = window.setTimeout(runScheduledScan, 120);
     if (!scanMaxTimer) scanMaxTimer = window.setTimeout(runScheduledScan, 1000);
   }
@@ -703,6 +724,10 @@
     scanTimer = 0;
     scanMaxTimer = 0;
     if (!scanDirty) return;
+    if (navigationPending) {
+      scanDirty = false;
+      return;
+    }
     scanDirty = false;
     evaluateRules();
   }
@@ -739,8 +764,9 @@
   function resetForNavigation() {
     if (location.href === lastUrl) return;
     lastUrl = location.href;
+    navigationPending = false;
     deferPageLoadUntilNavigation = false;
-    resetRuntimeStates();
+    resetRuntimeStates({ resetReason: "navigation" });
     runtimeSnapshot = null;
     profiles = [];
     globalEnabled = false;
@@ -902,7 +928,7 @@
 
   async function handleSnapshotUpdated(revision) {
     emitRuntimeEvent("runtime.settings.changed", { context: { revision } });
-    resetRuntimeStates();
+    resetRuntimeStates({ resetReason: "settingsChanged" });
     runtimeSnapshot = null;
     profiles = [];
     globalEnabled = false;
@@ -968,9 +994,12 @@
   observeDocument();
   document.addEventListener("DOMContentLoaded", scheduleAutoRun, { once: true });
   window.addEventListener("load", scheduleAutoRun, { once: true });
-  window.addEventListener("pageshow", () => {
+  window.addEventListener("pageshow", (event) => {
     lastUrl = location.href;
-    resetRuntimeStates({ clearDeferred: !deferPageLoadUntilNavigation });
+    if (event.persisted) {
+      navigationPending = false;
+      resetRuntimeStates({ clearDeferred: !deferPageLoadUntilNavigation, resetReason: "bfcacheRestore" });
+    }
     scheduleAutoRun();
   }, true);
   document.addEventListener("visibilitychange", () => {
