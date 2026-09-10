@@ -5,6 +5,7 @@
     createId,
     exportProfileData,
     isSupportedProfile,
+    redactProfileValues,
     normalizeOrigin,
     normalizeProfile,
     pageUrlForDiagnostics,
@@ -594,17 +595,24 @@
   }
 
   async function importFromText(rawText) {
+    if (String(rawText || "").length > 2_000_000) throw new Error("导入文件过大，最多支持 2 MB");
     let payload;
     try {
       payload = JSON.parse(rawText);
     } catch {
       throw new Error("文件不是有效的 JSON 备份");
     }
-    if (payload?.format !== "autofill-studio" || !Array.isArray(payload.profiles)) {
+    if (payload?.format !== "autofill-studio" || !["share", "backup"].includes(payload.kind) || !Array.isArray(payload.profiles)) {
       throw new Error("不是 AutoFlow Studio 的规则或备份文件");
     }
     if (payload.profiles.length > 200) throw new Error("文件中的规则数量过多");
-    const incoming = payload.profiles.map(normalizeProfile);
+    const incoming = payload.profiles.map((profile) => {
+      const normalized = normalizeProfile(profile);
+      return payload.kind === "share" || payload.secretsIncluded !== true
+        ? redactProfileValues(normalized)
+        : normalized;
+    });
+    if (incoming.some((profile) => profile.steps.length > 100)) throw new Error("单条规则的步骤数量过多");
     if (incoming.some((profile) => !isSupportedProfile(profile))) {
       throw new Error("文件包含当前版本不支持的规则动作或数据版本，请先升级插件后再导入");
     }
@@ -737,7 +745,7 @@
         renderProfiles();
       });
       const groupShare = makeIconButton("download", `下载 ${origin} 下的全部页面规则`, "profile-share");
-      groupShare.addEventListener("click", () => openExportDialog(profiles, origin, "site"));
+      groupShare.addEventListener("click", () => openExportDialog(profiles, origin, "share"));
       const allEnabled = profiles.every((profile) => profile.enabled);
       const someEnabled = profiles.some((profile) => profile.enabled);
       const groupSwitch = makeElement("label", "switch group-switch");

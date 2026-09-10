@@ -56,6 +56,11 @@ test("share export is a whitelist and never carries input values", () => {
   const backup = shared.exportProfileData(profile, true);
   assert.equal(backup.steps[0].value, "virtual-password");
   assert.equal(backup.steps[0].target.text, undefined);
+
+  const redacted = shared.redactProfileValues(profile);
+  assert.equal(redacted.steps[0].value, "");
+  assert.equal(redacted.steps[1].value, "");
+  assert.equal(redacted.steps[2].value, true);
 });
 
 test("legacy trigger migration keeps its submit step", () => {

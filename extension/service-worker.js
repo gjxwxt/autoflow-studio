@@ -50,6 +50,7 @@ async function ensureStorage() {
     };
     if (typeof stored.globalEnabled !== "boolean") updates.globalEnabled = true;
     await chrome.storage.local.set(updates);
+    await chrome.storage.local.remove(["enabled", "username", "password"]);
     return;
   }
 
@@ -71,6 +72,7 @@ async function ensureStorage() {
     globalEnabled: typeof stored.globalEnabled === "boolean" ? stored.globalEnabled : true,
     revision: 1
   });
+  await chrome.storage.local.remove(["enabled", "username", "password"]);
 }
 
 async function readProfiles() {
@@ -106,6 +108,12 @@ function validatePanelSender(sender) {
   const extensionPrefix = `chrome-extension://${chrome.runtime.id}/`;
   if (sender?.id !== chrome.runtime.id || !String(sender.url || "").startsWith(extensionPrefix)) {
     throw runtimeError("PROTOCOL_INVALID", "消息来源不是扩展面板");
+  }
+}
+
+function validateContentSender(sender) {
+  if (sender?.id !== chrome.runtime.id || !sender?.tab?.id || sender.frameId !== 0 || !sender.documentId) {
+    throw runtimeError("PROTOCOL_INVALID", "日志来源不是当前页面运行时");
   }
 }
 
@@ -388,12 +396,21 @@ async function finishRun(message, sender) {
   return { ok: true };
 }
 
-function appendRuntimeEvents(message, sendResponse) {
+function appendRuntimeEvents(message, sender, sendResponse) {
+  try {
+    validateContentSender(sender);
+  } catch (error) {
+    sendResponse({ ok: false, code: error.code, message: error.message });
+    return false;
+  }
   const events = Array.isArray(message?.payload?.events) ? message.payload.events.slice(0, 100) : [];
   logWriteChain = logWriteChain.then(async () => {
     const stored = await chrome.storage.session.get(LOG_KEY);
     const current = Array.isArray(stored[LOG_KEY]) ? stored[LOG_KEY] : [];
-    const next = [...current, ...events.map(sanitizeRuntimeEvent)].slice(-MAX_LOGS);
+    const next = [...current, ...events
+      .map(sanitizeRuntimeEvent)
+      .filter((event) => !event.documentId || event.documentId === sender.documentId)]
+      .slice(-MAX_LOGS);
     await chrome.storage.session.set({ [LOG_KEY]: next });
     return { ok: true, count: events.length };
   }).then(sendResponse).catch((error) => sendResponse({ ok: false, code: "LOG_WRITE_FAILED", message: error.message }));
@@ -432,8 +449,8 @@ async function handleMessage(message, sender) {
     case "runtime.startRun": return startRun(message, sender);
     case "runtime.getStepValue": return getStepValue(message, sender);
     case "runtime.finishRun": return finishRun(message, sender);
-    case "log.query": return queryRuntimeLogs(message);
-    case "log.clear": return clearRuntimeLogs();
+    case "log.query": validatePanelSender(sender); return queryRuntimeLogs(message);
+    case "log.clear": validatePanelSender(sender); return clearRuntimeLogs();
     default: throw runtimeError("PROTOCOL_INVALID", `未知消息：${message.type}`);
   }
 }
@@ -460,7 +477,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: false, code: "PROTOCOL_INVALID", message: "不支持的消息协议版本" });
       return false;
     }
-    return appendRuntimeEvents(message, sendResponse);
+    return appendRuntimeEvents(message, sender, sendResponse);
   }
   if (message?.type === "runtime.requestManualRun") {
     if (message.protocolVersion !== PROTOCOL_VERSION) {

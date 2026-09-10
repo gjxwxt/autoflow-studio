@@ -27,7 +27,7 @@ test("worker owns snapshot broadcast, leases, and session-only diagnostics", () 
   assert.ok(workerSource.includes("chrome.storage.session.get(key)"));
   assert.ok(workerSource.includes("chrome.storage.session.get(LOG_KEY)"));
   assert.match(workerSource, /GRANT_KEY_PREFIX/);
-  assert.match(workerSource, /case "log.clear": return clearRuntimeLogs()/);
+  assert.match(workerSource, /case "log.clear"[\s\S]{0,80}clearRuntimeLogs\(\)/);
 });
 
 test("refresh is a terminal runtime action with loop protection", () => {
@@ -51,7 +51,23 @@ test("normal pageshow does not cancel a run; BFCache restore does", () => {
 test("runtime reset and locator diagnostics retain safe correlation details", () => {
   assert.match(contentSource, /context: \{ resetReason \}/);
   assert.match(contentSource, /emitRuntimeEvent\("locator\.resolved", \{ profileId: runContext\?\.profileId/);
-  assert.match(workerSource, /case "log\.clear": return clearRuntimeLogs\(\)/);
+  assert.match(workerSource, /case "log\.clear"[\s\S]{0,80}clearRuntimeLogs\(\)/);
+});
+
+test("diagnostic and log control paths have sender boundaries", () => {
+  assert.match(workerSource, /function validateContentSender\(sender\)/);
+  assert.match(workerSource, /validateContentSender\(sender\)/);
+  assert.match(workerSource, /case "log\.query": validatePanelSender\(sender\)/);
+  assert.match(workerSource, /case "log\.clear": validatePanelSender\(sender\)/);
+  assert.match(workerSource, /event\.documentId === sender\.documentId/);
+  assert.match(workerSource, /chrome\.storage\.local\.remove\(\["enabled", "username", "password"\]\)/);
+});
+
+test("shared imports cannot bring value-bearing secrets through the share path", () => {
+  assert.match(panelSource, /redactProfileValues/);
+  assert.match(panelSource, /payload\.kind === "share" \|\| payload\.secretsIncluded !== true/);
+  assert.match(panelSource, /openExportDialog\(profiles, origin, "share"\)/);
+  assert.match(panelSource, /最多支持 2 MB/);
 });
 
 test("failed steps surface a run-level diagnostic with the step label", () => {

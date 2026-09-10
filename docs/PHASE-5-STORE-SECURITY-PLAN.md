@@ -1,8 +1,10 @@
 # Phase 5：商店反馈与安全收口计划
 
-状态：计划已建立，实施分支：`codex/phase-5-store-security`
+状态：S1 第一轮完成，实施分支：`codex/phase-5-store-security`
 
 Phase 4 已完成运行时基础、诊断能力、发布包和隐私政策，当前版本已经提交 Chrome Web Store 审核。Phase 5 不再继续堆叠功能，先处理审核反馈、真实用户反馈和敏感数据边界。
+
+本轮先完成低风险边界收口：共享规则导入不再接受填充/选择值，日志查询和清空限制在 Panel，日志批次限制在顶层 Content Runtime，旧版迁移键在迁移后清理；不引入自制加密。
 
 ## 目标
 

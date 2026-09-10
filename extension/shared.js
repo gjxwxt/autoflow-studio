@@ -393,6 +393,14 @@
     return deepClone(normalizeProfile(profile));
   }
 
+  function redactProfileValues(profile) {
+    const next = copyProfile(profile);
+    next.steps = next.steps.map((step) => isValueBearingAction(step.action)
+      ? { ...step, value: "" }
+      : step);
+    return next;
+  }
+
   globalThis.AutoFillShared = {
     DEFAULT_ATRUST_PROFILE,
     PROTOCOL_VERSION,
@@ -413,6 +421,7 @@
     normalizeProfile,
     normalizeTarget,
     pageUrlForDiagnostics,
+    redactProfileValues,
     runtimeProfile,
     sanitizeRuntimeEvent,
     SUPPORTED_ACTIONS,
