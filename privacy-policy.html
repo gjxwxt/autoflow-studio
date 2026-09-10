@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="AutoFlow Studio 隐私政策：本地优先的浏览器页面自动化规则扩展。" />
+  <title>AutoFlow Studio · 隐私政策</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #211c2b;
+      --muted: #6c6477;
+      --soft: #f8f2f6;
+      --line: #ead8e1;
+      --brand: #a73379;
+      --brand-deep: #7f1f58;
+      --ok: #087b4b;
+      --shadow: 0 24px 70px rgba(73, 27, 59, .12);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 85% -10%, rgba(167, 51, 121, .13), transparent 34rem),
+        linear-gradient(180deg, #fff 0%, #fcfafc 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+      line-height: 1.75;
+    }
+
+    a { color: var(--brand-deep); }
+
+    .shell {
+      width: min(100% - 36px, 960px);
+      margin: 0 auto;
+      padding: 30px 0 70px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 76px;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--ink);
+      font-size: 18px;
+      font-weight: 750;
+      letter-spacing: -.02em;
+      text-decoration: none;
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 38px;
+      height: 38px;
+      place-items: center;
+      border-radius: 12px;
+      color: #fff;
+      background: var(--brand);
+      box-shadow: 0 9px 22px rgba(167, 51, 121, .24);
+      font-size: 21px;
+      font-weight: 800;
+    }
+
+    .topbar-label {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 650;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .hero {
+      max-width: 760px;
+      margin-bottom: 38px;
+    }
+
+    .eyebrow {
+      margin-bottom: 12px;
+      color: var(--brand);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+
+    h1, h2, p { margin-top: 0; }
+
+    h1 {
+      margin-bottom: 18px;
+      font-size: clamp(36px, 6vw, 62px);
+      line-height: 1.08;
+      letter-spacing: -.055em;
+    }
+
+    .lead {
+      max-width: 680px;
+      margin-bottom: 22px;
+      color: var(--muted);
+      font-size: clamp(17px, 2.4vw, 21px);
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px 22px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .meta strong { color: var(--ink); }
+
+    .notice {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      margin: 32px 0 42px;
+      padding: 20px 22px;
+      border: 1px solid #d6eadf;
+      border-radius: 18px;
+      color: #245f48;
+      background: #f2faf5;
+    }
+
+    .notice-icon {
+      flex: 0 0 auto;
+      width: 26px;
+      height: 26px;
+      margin-top: 2px;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--ok);
+      font-size: 16px;
+      font-weight: 800;
+      line-height: 26px;
+      text-align: center;
+    }
+
+    .notice p { margin: 0; }
+
+    .content {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 220px;
+      gap: 56px;
+      align-items: start;
+    }
+
+    article {
+      min-width: 0;
+      padding: 34px 38px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: rgba(255, 255, 255, .88);
+      box-shadow: var(--shadow);
+    }
+
+    section + section {
+      margin-top: 34px;
+      padding-top: 32px;
+      border-top: 1px solid #f0e5eb;
+    }
+
+    h2 {
+      margin-bottom: 13px;
+      font-size: 21px;
+      line-height: 1.3;
+      letter-spacing: -.025em;
+    }
+
+    p, li { color: var(--muted); }
+
+    ul { margin: 10px 0 0; padding-left: 22px; }
+
+    li + li { margin-top: 7px; }
+
+    .toc {
+      position: sticky;
+      top: 24px;
+      padding-top: 8px;
+    }
+
+    .toc-title {
+      margin-bottom: 12px;
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+
+    .toc a {
+      display: block;
+      padding: 5px 0;
+      color: var(--muted);
+      font-size: 14px;
+      text-decoration: none;
+    }
+
+    .toc a:hover { color: var(--brand); }
+
+    footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      margin-top: 30px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 720px) {
+      .shell { width: min(100% - 26px, 620px); padding-top: 18px; }
+      .topbar { margin-bottom: 52px; }
+      .topbar-label { display: none; }
+      .content { display: block; }
+      article { padding: 26px 22px; border-radius: 20px; }
+      .toc { display: none; }
+      footer { display: block; }
+      footer span { display: block; margin-top: 5px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <nav class="topbar" aria-label="页面导航">
+      <a class="brand" href="https://github.com/gjxwxt/autoflow-studio">
+        <span class="brand-mark" aria-hidden="true">A</span>
+        <span>AutoFlow Studio</span>
+      </a>
+      <span class="topbar-label">Privacy policy</span>
+    </nav>
+
+    <header class="hero">
+      <div class="eyebrow">Privacy policy</div>
+      <h1>AutoFlow Studio<br />隐私政策</h1>
+      <p class="lead">AutoFlow Studio 是一个本地优先的 Chrome 扩展，用于保存并执行用户自行配置的网页自动化规则。</p>
+      <div class="meta">
+        <span><strong>生效日期</strong>：2026 年 9 月 10 日</span>
+        <span><strong>适用范围</strong>：AutoFlow Studio Chrome 扩展</span>
+      </div>
+    </header>
+
+    <div class="notice">
+      <span class="notice-icon" aria-hidden="true">✓</span>
+      <p>AutoFlow Studio 不设开发者云端账户、分析服务或同步服务。规则和凭据默认只保存在你的 Chrome 配置中，不会上传到我们的服务器。</p>
+    </div>
+
+    <div class="content">
+      <article>
+        <section id="data">
+          <h2>1. 我们处理哪些数据</h2>
+          <p>为了完成你主动配置的自动化操作，扩展可能在本地处理以下信息：</p>
+          <ul>
+            <li>你创建的站点规则，包括网站来源、路径或 Hash 匹配条件、步骤名称、元素选择器和操作参数。</li>
+            <li>你主动填写到规则中的用户名、密码及其他表单值。此类值属于敏感信息。</li>
+            <li>当前页面的标题、URL 和用于匹配规则的页面元素特征。</li>
+            <li>当前扩展会话中的脱敏运行诊断，例如规则、步骤、动作、结果和错误代码。</li>
+          </ul>
+        </section>
+
+        <section id="use">
+          <h2>2. 我们如何使用这些数据</h2>
+          <p>这些信息仅用于：</p>
+          <ul>
+            <li>在 Chrome 侧边栏中展示和编辑你的规则。</li>
+            <li>在匹配的网页中执行你配置的填充、勾选、选择、点击、等待或刷新操作。</li>
+            <li>在你主动请求时导入、导出、分享规则或查看运行诊断。</li>
+          </ul>
+          <p>扩展不会基于这些信息建立用户画像，也不会将其用于广告、推荐或与自动化功能无关的用途。</p>
+        </section>
+
+        <section id="storage">
+          <h2>3. 数据存储与保留</h2>
+          <p>规则配置和敏感值保存在 Chrome 的本地扩展存储中；运行时诊断保存在当前扩展会话的临时存储中。我们没有可访问这些本地数据的开发者后台。</p>
+          <p>数据会保留到你删除规则、清除扩展数据或卸载扩展为止。你可以随时在扩展界面删除规则，或通过 Chrome 的扩展管理页面清除扩展数据。</p>
+        </section>
+
+        <section id="sharing">
+          <h2>4. 导入、导出与分享</h2>
+          <p>导入和导出均由你主动发起：</p>
+          <ul>
+            <li>规则分享默认不包含填充值和密码。</li>
+            <li>完整备份可能包含密码和其他敏感值，扩展会在导出前提示确认。</li>
+            <li>导出到文件或剪贴板后，数据会由 Chrome 和你的操作系统按相应机制处理；请只在你信任的位置保存或粘贴。</li>
+          </ul>
+        </section>
+
+        <section id="permissions">
+          <h2>5. 浏览器权限</h2>
+          <p>扩展使用 Chrome 权限来完成本地功能：</p>
+          <ul>
+            <li><strong>storage</strong>：保存本地规则、开关和会话诊断。</li>
+            <li><strong>sidePanel</strong>：提供规则管理界面。</li>
+            <li><strong>activeTab、tabs</strong>：读取当前页面信息，并把规则执行到匹配的标签页。</li>
+            <li><strong>scripting</strong>：在你配置并授权的网站上运行页面规则。</li>
+          </ul>
+          <p>除内置的 aTrust 页面外，其他网站的访问权限会在你保存对应规则时按站点请求，不默认开启所有网站。</p>
+        </section>
+
+        <section id="third-party">
+          <h2>6. 第三方网站与安全边界</h2>
+          <p>扩展会按照你的规则与目标网站页面交互。目标网站如何处理你提交的表单数据，受该网站自己的隐私政策约束，AutoFlow Studio 无法控制。</p>
+          <p>Chrome 本地扩展存储不是经过加密的密码管理器保险箱；密码在执行填充时也会进入目标页面的 DOM。请仅在你信任的设备、浏览器配置和网站上使用，并避免把完整备份放在不安全的位置。</p>
+        </section>
+
+        <section id="changes">
+          <h2>7. 政策变更与联系我们</h2>
+          <p>如果数据处理方式发生变化，我们会更新本页面的生效日期和内容。你可以通过 <a href="https://github.com/gjxwxt/autoflow-studio/issues">GitHub Issues</a> 提交隐私问题、漏洞报告或其他反馈。</p>
+          <p>本政策仅说明 AutoFlow Studio 扩展的数据处理方式，不构成法律、财务或安全建议。</p>
+        </section>
+      </article>
+
+      <aside class="toc" aria-label="目录">
+        <div class="toc-title">目录</div>
+        <a href="#data">处理哪些数据</a>
+        <a href="#use">如何使用</a>
+        <a href="#storage">存储与保留</a>
+        <a href="#sharing">导入、导出与分享</a>
+        <a href="#permissions">浏览器权限</a>
+        <a href="#third-party">第三方网站</a>
+        <a href="#changes">政策变更</a>
+      </aside>
+    </div>
+
+    <footer>
+      <span>© 2026 AutoFlow Studio</span>
+      <span>本地优先 · 明确授权 · 最小化处理</span>
+    </footer>
+  </div>
+</body>
+</html>
