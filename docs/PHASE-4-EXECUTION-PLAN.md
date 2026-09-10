@@ -1,6 +1,6 @@
 # Phase 4：Runtime Foundation & Observability 执行计划
 
-状态：待执行 / 执行中
+状态：已合并到 `main`；已提交 Chrome Web Store 审核，后续反馈转入 Phase 5
 
 总体设计基线：[`PHASE-4-RUNTIME-ARCHITECTURE.md`](./PHASE-4-RUNTIME-ARCHITECTURE.md)
 
@@ -207,7 +207,7 @@ test: promote browser and security contracts
 - [x] S4 唯一 Locator Contract
 - [x] S5 Structured Runtime Events
 - [x] S6 最小运行状态 UI 与诊断导出
-- [ ] S7 回归、浏览器验收与发布门禁
+- [x] S7 回归、浏览器验收与发布门禁（发布包已提交审核；后续审核反馈不回写为 Phase 4 变更）
 
 ## 本轮实现记录（2026-09-08）
 
@@ -217,7 +217,7 @@ test: promote browser and security contracts
 - Worker 仅通过 storage.onChanged 广播 snapshot 失效，避免单次保存重复重置页面运行时；
 - Shared 测试覆盖 JIT 值隐藏、日志脱敏和 value-bearing action 分类。
 
-尚需完成 S7 的真实 Chrome 无痕验收与发布包安装回归；该项不能以 Node 单元测试替代。
+Phase 4 的发布门禁已完成并提交 Chrome Web Store 审核；审核意见、用户反馈和后续安全改造统一进入 Phase 5。
 
 ## 评审收口记录（2026-09-08）
 
